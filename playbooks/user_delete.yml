@@ -1,0 +1,39 @@
+---
+- name: Remove Administrator Account on Linux & Windows
+  hosts: all
+  gather_facts: false
+  ignore_unreachable: true
+  ignore_errors: true
+
+  tasks:
+    # -------------------------------------------------------------
+    # LINUX TARGETS
+    # -------------------------------------------------------------
+    - name: "[Linux] Kill all running processes of user"
+      when: os_type | default('linux') == 'linux'
+      ansible.builtin.raw: "pkill -9 -u {{ target_username }} || true"
+      changed_when: false
+
+    - name: "[Linux] Remove sudoers drop-in file"
+      when: os_type | default('linux') == 'linux'
+      ansible.builtin.file:
+        path: "/etc/sudoers.d/{{ target_username }}"
+        state: absent
+
+    - name: "[Linux] Delete user and home directory"
+      when: os_type | default('linux') == 'linux'
+      ansible.builtin.user:
+        name: "{{ target_username }}"
+        state: absent
+        remove: true
+      register: linux_del_res
+
+    # -------------------------------------------------------------
+    # WINDOWS TARGETS (via OpenSSH)
+    # -------------------------------------------------------------
+    - name: "[Windows] Delete local user"
+      when: os_type | default('linux') == 'windows'
+      ansible.builtin.raw: >
+        net user {{ target_username }} /delete
+      register: win_del_res
+      changed_when: "'command completed successfully' in win_del_res.stdout | lower or win_del_res.rc == 0"

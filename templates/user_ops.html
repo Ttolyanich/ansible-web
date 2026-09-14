@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+
+{% block title %}Управление учетными записями на серверах{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto space-y-6">
+    <!-- Header -->
+    <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl">
+        <div class="flex items-center gap-3">
+            <div class="w-12 h-12 rounded-xl bg-purple-950/80 border border-purple-800 text-purple-400 flex items-center justify-center text-2xl">
+                <i class="fa-solid fa-user-shield"></i>
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-white tracking-tight">Мастер управления учетными записями</h1>
+                <p class="text-xs text-slate-400 mt-0.5">Массовое создание и удаление учетных записей администраторов на Linux и Windows хостах</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Wizard Form -->
+    <form method="POST" action="{{ url_for('run_user_ops') }}" class="space-y-6" onsubmit="return confirmAction();">
+        <!-- Step 1: Operation Mode -->
+        <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl">
+            <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-4 flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs">1</span>
+                Выберите операцию
+            </h2>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label class="cursor-pointer">
+                    <input type="radio" name="operation" value="create" class="peer sr-only" checked onchange="toggleOperationMode()">
+                    <div class="p-4 rounded-xl border border-slate-700 bg-slate-950/60 peer-checked:border-purple-500 peer-checked:bg-purple-950/20 transition hover:border-slate-600">
+                        <div class="flex items-center gap-3">
+                            <i class="fa-solid fa-user-plus text-2xl text-purple-400"></i>
+                            <div>
+                                <div class="font-bold text-white text-sm">Создать пользователя</div>
+                                <div class="text-xs text-slate-400 mt-0.5">SSH-ключ (Linux), пароль и админ-права (Windows)</div>
+                            </div>
+                        </div>
+                    </div>
+                </label>
+
+                <label class="cursor-pointer">
+                    <input type="radio" name="operation" value="delete" class="peer sr-only" onchange="toggleOperationMode()">
+                    <div class="p-4 rounded-xl border border-slate-700 bg-slate-950/60 peer-checked:border-red-500 peer-checked:bg-red-950/20 transition hover:border-slate-600">
+                        <div class="flex items-center gap-3">
+                            <i class="fa-solid fa-user-minus text-2xl text-red-400"></i>
+                            <div>
+                                <div class="font-bold text-white text-sm">Удалить пользователя</div>
+                                <div class="text-xs text-slate-400 mt-0.5">Завершение процессов и удаление учетки</div>
+                            </div>
+                        </div>
+                    </div>
+                </label>
+            </div>
+        </div>
+
+        <!-- Step 2: Target Scope Selection -->
+        <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl">
+            <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-4 flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs">2</span>
+                Выберите целевые серверы
+            </h2>
+
+            <div class="space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <label class="cursor-pointer">
+                        <input type="radio" name="target_type" value="preselected" class="peer sr-only" {% if selected_host_ids %}checked{% endif %} onchange="toggleTargetScope()">
+                        <div class="p-3 rounded-lg border border-slate-700 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/20 text-xs">
+                            <div class="font-bold text-white">Выбранные хосты</div>
+                            <div class="text-slate-400 text-[11px] mt-0.5">Через чекбоксы: <span id="preselected-badge" class="font-mono text-emerald-400 font-bold">{{ selected_host_ids|length }}</span> шт.</div>
+                        </div>
+                    </label>
+
+                    <label class="cursor-pointer">
+                        <input type="radio" name="target_type" value="group" class="peer sr-only" {% if not selected_host_ids and selected_group_id %}checked{% endif %} onchange="toggleTargetScope()">
+                        <div class="p-3 rounded-lg border border-slate-700 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/20 text-xs">
+                            <div class="font-bold text-white">Группа компании</div>
+                            <div class="text-slate-400 text-[11px] mt-0.5">Все хосты конкретной группы</div>
+                        </div>
+                    </label>
+
+                    <label class="cursor-pointer">
+                        <input type="radio" name="target_type" value="all" class="peer sr-only" {% if not selected_host_ids and not selected_group_id %}checked{% endif %} onchange="toggleTargetScope()">
+                        <div class="p-3 rounded-lg border border-slate-700 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/20 text-xs">
+                            <div class="font-bold text-white">Все активные хосты</div>
+                            <div class="text-slate-400 text-[11px] mt-0.5">Вся инфраструктура ({{ all_hosts_count }} шт.)</div>
+                        </div>
+                    </label>
+                </div>
+
+                <!-- Group Selector -->
+                <div id="scope-group-wrapper" class="hidden">
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Выберите группу компании</label>
+                    <select name="group_id" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm focus:ring-1 focus:ring-red-500">
+                        {% for g in groups %}
+                        <option value="{{ g.id }}" {% if selected_group_id|string == g.id|string %}selected{% endif %}>
+                            {{ g.name }} ({{ g.hosts.count() }} хостов)
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- OS Filter -->
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Ограничить по типу ОС (опционально)</label>
+                    <select name="target_os" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm focus:ring-1 focus:ring-red-500">
+                        <option value="all">Все ОС (и Linux, и Windows)</option>
+                        <option value="linux">Только Linux хосты</option>
+                        <option value="windows">Только Windows хосты</option>
+                    </select>
+                </div>
+
+                <!-- Preselected IDs hidden input -->
+                <input type="hidden" name="selected_host_ids_json" id="selected-host-ids-input" value="{{ selected_host_ids|tojson }}">
+            </div>
+        </div>
+
+        <!-- Step 3: Account Credentials & Details -->
+        <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl space-y-5">
+            <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-4 flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs">3</span>
+                Параметры учетной записи
+            </h2>
+
+            <!-- Username (Required for both) -->
+            <div>
+                <label for="username" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                    Имя пользователя <span class="text-red-500">*</span>
+                </label>
+                <input type="text" id="target_username" name="target_username" required placeholder="например: it_admin или support"
+                       class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm focus:ring-2 focus:ring-red-500">
+                <p class="text-[11px] text-slate-500 mt-1">Только латинские буквы, цифры и символы дефис/подчеркивание</p>
+            </div>
+
+            <!-- Fields for CREATE mode -->
+            <div id="create-fields" class="space-y-5">
+                <!-- Linux SSH Key -->
+                <div>
+                    <label for="ssh_key" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex justify-between items-center">
+                        <span>Публичный SSH-ключ (для Linux хостов)</span>
+                        <span class="text-[10px] text-slate-500 font-normal">authorized_keys</span>
+                    </label>
+                    <textarea id="ssh_key" name="target_ssh_key" rows="3" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@desktop"
+                              class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-xs focus:ring-2 focus:ring-red-500"></textarea>
+                    <p class="text-[11px] text-slate-500 mt-1">Ключ будет добавлен в ~/.ssh/authorized_keys созданного пользователя</p>
+                </div>
+
+                <!-- Windows Password -->
+                <div>
+                    <label for="password" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex justify-between items-center">
+                        <span>Пароль пользователя (для Windows хостов)</span>
+                        <button type="button" onclick="generateRandomPassword()" class="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Сгенерировать сложный пароль
+                        </button>
+                    </label>
+                    <input type="text" id="target_password" name="target_password" placeholder="Укажите пароль..."
+                           class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm focus:ring-2 focus:ring-red-500">
+                    <p class="text-[11px] text-slate-500 mt-1">Windows требует надежный пароль (буквы разного регистра, цифры и спецсимволы)</p>
+                </div>
+
+                <!-- Sudo / Administrators Privilege -->
+                <div class="p-4 bg-slate-950/70 border border-slate-800 rounded-lg flex items-start gap-3">
+                    <input type="checkbox" id="target_sudo" name="target_sudo" value="1" checked
+                           class="mt-1 rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-red-500">
+                    <div>
+                        <label for="target_sudo" class="text-sm font-bold text-white cursor-pointer">
+                            Предоставить права Администратора (Root / Sudo / Local Admins)
+                        </label>
+                        <p class="text-xs text-slate-400 mt-0.5">
+                            Linux: запись в <code class="text-amber-300">/etc/sudoers.d/username</code> (NOPASSWD: ALL)<br>
+                            Windows: добавление в группу <code class="text-sky-300">Administrators</code>
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <div class="pt-4 border-t border-slate-800 flex justify-end">
+                <button type="submit" id="submit-btn" class="px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg shadow-lg shadow-purple-950/50 transition flex items-center gap-2">
+                    <i class="fa-solid fa-play"></i>
+                    <span id="submit-btn-text">Запустить создание пользователя</span>
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function toggleOperationMode() {
+        const op = document.querySelector('input[name="operation"]:checked').value;
+        const createFields = document.getElementById('create-fields');
+        const submitBtn = document.getElementById('submit-btn');
+        const submitText = document.getElementById('submit-btn-text');
+
+        if (op === 'delete') {
+            createFields.classList.add('hidden');
+            submitBtn.className = "px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg shadow-lg shadow-red-950/50 transition flex items-center gap-2";
+            submitText.innerText = "Запустить удаление пользователя";
+        } else {
+            createFields.classList.remove('hidden');
+            submitBtn.className = "px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg shadow-lg shadow-purple-950/50 transition flex items-center gap-2";
+            submitText.innerText = "Запустить создание пользователя";
+        }
+    }
+
+    function toggleTargetScope() {
+        const targetType = document.querySelector('input[name="target_type"]:checked').value;
+        const groupWrapper = document.getElementById('scope-group-wrapper');
+        if (targetType === 'group') {
+            groupWrapper.classList.remove('hidden');
+        } else {
+            groupWrapper.classList.add('hidden');
+        }
+    }
+
+    function generateRandomPassword() {
+        const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*+";
+        let pass = "";
+        for (let i = 0; i < 16; i++) {
+            pass += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        document.getElementById('target_password').value = pass;
+    }
+
+    function confirmAction() {
+        const op = document.querySelector('input[name="operation"]:checked').value;
+        const username = document.getElementById('target_username').value.trim();
+        if (!username) {
+            alert('Укажите имя пользователя!');
+            return false;
+        }
+
+        if (op === 'delete') {
+            return confirm(`ВНИМАНИЕ! Вы собираетесь УДАЛИТЬ пользователя "${username}" с серверов.\nВсе запущенные процессы пользователя будут принудительно завершены.\n\nПродолжить?`);
+        }
+        return confirm(`Запустить создание пользователя "${username}" на целевых серверах?`);
+    }
+
+    // Initialize state
+    toggleOperationMode();
+    toggleTargetScope();
+</script>
+{% endblock %}

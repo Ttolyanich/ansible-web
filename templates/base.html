@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Ansible Web Console{% endblock %} - Ansible & Zabbix Control</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            900: '#0f172a',
+                            800: '#1e293b',
+                            700: '#334155',
+                            600: '#475569'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* Custom scrollbar and animations */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .terminal-box {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+    </style>
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+    <!-- Navbar -->
+    <nav class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <!-- Brand & Logo -->
+                <div class="flex items-center space-x-3">
+                    <a href="{{ url_for('dashboard') }}" class="flex items-center space-x-2 text-red-500 hover:text-red-400 transition">
+                        <i class="fa-solid fa-terminal text-2xl"></i>
+                        <span class="font-bold text-xl tracking-tight text-white">Ansible<span class="text-red-500">Web</span></span>
+                    </a>
+                    <span class="text-xs bg-red-950 text-red-400 px-2.5 py-0.5 rounded-full border border-red-800 font-mono">v1.0</span>
+                </div>
+
+                {% if current_user.is_authenticated %}
+                <!-- Navigation Links -->
+                <div class="hidden md:flex items-center space-x-1 lg:space-x-3">
+                    <a href="{{ url_for('dashboard') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if request.endpoint == 'dashboard' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition">
+                        <i class="fa-solid fa-gauge-high mr-1.5 text-slate-400"></i>Дашборд
+                    </a>
+                    <a href="{{ url_for('hosts_view') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if request.endpoint in ['hosts_view', 'host_detail'] %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition">
+                        <i class="fa-solid fa-server mr-1.5 text-slate-400"></i>Хосты
+                    </a>
+                    <a href="{{ url_for('user_ops_view') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if request.endpoint == 'user_ops_view' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition">
+                        <i class="fa-solid fa-user-shield mr-1.5 text-slate-400"></i>Управление доступом
+                    </a>
+                    <a href="{{ url_for('tasks_view') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if request.endpoint in ['tasks_view', 'task_detail'] %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition">
+                        <i class="fa-solid fa-list-check mr-1.5 text-slate-400"></i>Задачи & Логи
+                    </a>
+                    {% if current_user.is_admin %}
+                    <a href="{{ url_for('credentials_view') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if request.endpoint == 'credentials_view' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition">
+                        <i class="fa-solid fa-key mr-1.5 text-slate-400"></i>Ключи SSH
+                    </a>
+                    <a href="{{ url_for('users_view') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if request.endpoint == 'users_view' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition">
+                        <i class="fa-solid fa-users-gear mr-1.5 text-slate-400"></i>Пользователи
+                    </a>
+                    <a href="{{ url_for('settings_view') }}" class="px-3 py-2 rounded-md text-sm font-medium {% if request.endpoint == 'settings_view' %}bg-slate-800 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %} transition">
+                        <i class="fa-solid fa-sliders mr-1.5 text-slate-400"></i>Настройки
+                    </a>
+                    {% endif %}
+                </div>
+
+                <!-- User Profile & Logout -->
+                <div class="flex items-center space-x-3">
+                    <span class="text-xs px-2.5 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700 flex items-center space-x-1.5">
+                        <i class="fa-solid fa-user-circle text-sm text-indigo-400"></i>
+                        <span>{{ current_user.username }}</span>
+                        <span class="text-[10px] font-mono uppercase px-1 rounded {% if current_user.is_admin %}bg-purple-900/60 text-purple-300{% else %}bg-blue-900/60 text-blue-300{% endif %}">{{ current_user.role }}</span>
+                    </span>
+                    <a href="{{ url_for('logout') }}" title="Выйти" class="text-slate-400 hover:text-red-400 p-2 rounded-lg hover:bg-slate-800 transition">
+                        <i class="fa-solid fa-arrow-right-from-bracket text-lg"></i>
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <!-- Flash Messages Container -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4 w-full">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="space-y-2 mb-4">
+                    {% for category, message in messages %}
+                        <div class="flex items-center justify-between p-4 rounded-lg border text-sm {% if category == 'error' or category == 'danger' %}bg-red-950/80 border-red-800 text-red-200{% elif category == 'success' %}bg-emerald-950/80 border-emerald-800 text-emerald-200{% else %}bg-blue-950/80 border-blue-800 text-blue-200{% endif %}" role="alert">
+                            <div class="flex items-center space-x-3">
+                                <i class="fa-solid {% if category == 'error' or category == 'danger' %}fa-circle-xmark text-red-400{% elif category == 'success' %}fa-circle-check text-emerald-400{% else %}fa-circle-info text-blue-400{% endif %} text-lg"></i>
+                                <span>{{ message }}</span>
+                            </div>
+                            <button onclick="this.parentElement.remove()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    <!-- Main Content -->
+    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900/60 border-t border-slate-800 py-4 mt-8 text-center text-xs text-slate-500">
+        <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center space-y-2 sm:space-y-0">
+            <div>Ansible Web Control & Zabbix Inventory &copy; 2026</div>
+            <div class="flex items-center space-x-4">
+                <span class="flex items-center space-x-1.5"><span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span><span>System Online</span></span>
+                <span>Ansible 2.15+</span>
+            </div>
+        </div>
+    </footer>
+
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

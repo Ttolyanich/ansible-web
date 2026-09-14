@@ -1,0 +1,68 @@
+---
+- name: Create Administrator Account on Linux & Windows
+  hosts: all
+  gather_facts: false
+  ignore_unreachable: true
+  ignore_errors: true
+
+  tasks:
+    # -------------------------------------------------------------
+    # LINUX TARGETS
+    # -------------------------------------------------------------
+    - name: "[Linux] Ensure user exists with home directory"
+      when: os_type | default('linux') == 'linux'
+      ansible.builtin.user:
+        name: "{{ target_username }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+      register: linux_user_res
+
+    - name: "[Linux] Setup SSH authorized_keys"
+      when: 
+        - os_type | default('linux') == 'linux'
+        - target_ssh_key is defined
+        - target_ssh_key | trim | length > 0
+      ansible.posix.authorized_key:
+        user: "{{ target_username }}"
+        key: "{{ target_ssh_key }}"
+        state: present
+        exclusive: false
+      register: linux_key_res
+
+    - name: "[Linux] Configure sudoers permissions (NOPASSWD)"
+      when: 
+        - os_type | default('linux') == 'linux'
+        - target_sudo | default(true) | bool
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ target_username }}"
+        content: "{{ target_username }} ALL=(ALL) NOPASSWD: ALL\n"
+        mode: '0440'
+        validate: 'visudo -cf %s'
+      register: linux_sudo_res
+
+    # -------------------------------------------------------------
+    # WINDOWS TARGETS (via OpenSSH)
+    # -------------------------------------------------------------
+    - name: "[Windows] Create local user and set password"
+      when: os_type | default('linux') == 'windows'
+      ansible.builtin.raw: >
+        net user {{ target_username }} "{{ target_password }}" /add /y /expires:never
+      register: win_user_res
+      changed_when: "'command completed successfully' in win_user_res.stdout | lower or win_user_res.rc == 0"
+
+    - name: "[Windows] Add user to local Administrators group"
+      when: 
+        - os_type | default('linux') == 'windows'
+        - target_sudo | default(true) | bool
+      ansible.builtin.raw: >
+        net localgroup "Administrators" {{ target_username }} /add
+      register: win_group_res
+      changed_when: "'command completed successfully' in win_group_res.stdout | lower or win_group_res.rc == 0"
+
+    - name: "[Windows] Prevent password expiration"
+      when: os_type | default('linux') == 'windows'
+      ansible.builtin.raw: >
+        wmic useraccount where name='{{ target_username }}' set PasswordExpires=FALSE
+      register: win_pass_res
+      changed_when: false

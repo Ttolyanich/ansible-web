@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки Zabbix API{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+    <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl">
+        <h1 class="text-xl font-bold text-white tracking-tight flex items-center gap-2 mb-1">
+            <i class="fa-solid fa-sliders text-red-500"></i> Интеграция с Zabbix API
+        </h1>
+        <p class="text-xs text-slate-400">Настройка подключения для автоматического сбора инвентаря серверов и шаблонов</p>
+
+        <form method="POST" action="{{ url_for('settings_view') }}" class="space-y-5 mt-6 text-xs">
+            <div>
+                <label class="block text-slate-300 font-semibold uppercase tracking-wider mb-1.5">
+                    URL Zabbix API <span class="text-red-500">*</span>
+                </label>
+                <input type="url" name="url" value="{{ setting.url }}" required placeholder="https://zabbix.company.com/api_jsonrpc.php"
+                       class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm focus:ring-1 focus:ring-red-500">
+                <p class="text-[11px] text-slate-500 mt-1">Обычно заканчивается на <code class="text-slate-400">/api_jsonrpc.php</code></p>
+            </div>
+
+            <div>
+                <label class="block text-slate-300 font-semibold uppercase tracking-wider mb-1.5">
+                    Zabbix API Token <span class="text-red-500">*</span>
+                </label>
+                <input type="password" name="token" value="{{ setting.token }}" placeholder="Введите токен Zabbix API (32+ символов)"
+                       class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm focus:ring-1 focus:ring-red-500">
+                <p class="text-[11px] text-slate-500 mt-1">Создаётся в Zabbix: Administration &rarr; General &rarr; API tokens (требуются права на чтение хостов)</p>
+            </div>
+
+            <div class="space-y-3 pt-2">
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" name="verify_ssl" id="verify_ssl" value="1" {% if setting.verify_ssl %}checked{% endif %}
+                           class="rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-red-500">
+                    <label for="verify_ssl" class="text-slate-300 cursor-pointer">Проверять валидность SSL сертификата (Verify SSL)</label>
+                </div>
+
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" name="auto_sync" id="auto_sync" value="1" {% if setting.auto_sync %}checked{% endif %}
+                           class="rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-red-500">
+                    <label for="auto_sync" class="text-slate-300 cursor-pointer">Автоматическая периодическая синхронизация</label>
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-slate-300 font-semibold mb-1">Интервал автосинхронизации (минут)</label>
+                <input type="number" name="sync_interval_mins" value="{{ setting.sync_interval_mins }}" min="5" max="1440"
+                       class="w-32 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-3 pt-5 border-t border-slate-800">
+                <button type="button" onclick="testConnection()" class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-lg border border-slate-700 transition flex items-center gap-2">
+                    <i class="fa-solid fa-plug"></i>
+                    <span>Проверить подключение</span>
+                </button>
+
+                <div class="flex items-center gap-2">
+                    <button type="submit" class="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg shadow-md transition">
+                        Сохранить настройки
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        <div id="test-result" class="mt-4 hidden p-3 rounded-lg text-xs font-mono"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    async function testConnection() {
+        const url = document.querySelector('input[name="url"]').value;
+        const token = document.querySelector('input[name="token"]').value;
+        const verifySsl = document.querySelector('input[name="verify_ssl"]').checked;
+        const resultDiv = document.getElementById('test-result');
+
+        resultDiv.classList.remove('hidden', 'bg-red-950', 'text-red-200', 'border-red-800', 'bg-emerald-950', 'text-emerald-200', 'border-emerald-800');
+        resultDiv.classList.add('bg-slate-950', 'text-slate-300', 'border', 'border-slate-800');
+        resultDiv.innerHTML = '<i class="fa-solid fa-spinner animate-spin mr-2"></i> Проверка подключения...';
+
+        try {
+            const resp = await fetch("{{ url_for('test_zabbix_api') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url, token, verify_ssl: verifySsl })
+            });
+            const data = await resp.json();
+            resultDiv.classList.remove('bg-slate-950', 'text-slate-300', 'border-slate-800');
+            if (data.success) {
+                resultDiv.classList.add('bg-emerald-950', 'text-emerald-200', 'border', 'border-emerald-800');
+                resultDiv.innerHTML = `<i class="fa-solid fa-check mr-2"></i> ${data.message}`;
+            } else {
+                resultDiv.classList.add('bg-red-950', 'text-red-200', 'border', 'border-red-800');
+                resultDiv.innerHTML = `<i class="fa-solid fa-xmark mr-2"></i> ${data.message}`;
+            }
+        } catch (err) {
+            resultDiv.className = 'mt-4 p-3 rounded-lg text-xs font-mono bg-red-950 text-red-200 border border-red-800';
+            resultDiv.innerHTML = `<i class="fa-solid fa-xmark mr-2"></i> Ошибка запроса: ${err}`;
+        }
+    }
+</script>
+{% endblock %}

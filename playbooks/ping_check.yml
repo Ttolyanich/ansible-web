@@ -1,0 +1,12 @@
+---
+- name: Fast SSH Connectivity & Availability Check
+  hosts: all
+  gather_facts: false
+  ignore_unreachable: true
+  ignore_errors: true
+
+  tasks:
+    - name: Test raw SSH execution
+      ansible.builtin.raw: echo PONG
+      register: ping_test
+      changed_when: false

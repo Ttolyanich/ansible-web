@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+
+{% block title %}Дашборд{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header with Quick Action Buttons -->
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900 border border-slate-800 p-6 rounded-xl">
+        <div>
+            <h1 class="text-2xl font-bold text-white tracking-tight flex items-center gap-2">
+                <i class="fa-solid fa-gauge-high text-red-500"></i> Обзор инфраструктуры
+            </h1>
+            <p class="text-sm text-slate-400 mt-1">
+                Zabbix синхронизация: 
+                {% if zabbix_setting and zabbix_setting.last_sync_at %}
+                    <span class="text-slate-300">{{ zabbix_setting.last_sync_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                    {% if zabbix_setting.last_sync_status == 'success' %}
+                        <span class="text-xs text-emerald-400 font-semibold ml-1.5"><i class="fa-solid fa-check"></i> ОК</span>
+                    {% else %}
+                        <span class="text-xs text-red-400 font-semibold ml-1.5"><i class="fa-solid fa-triangle-exclamation"></i> Ошибка</span>
+                    {% endif %}
+                {% else %}
+                    <span class="text-amber-400 text-xs font-medium">Ещё не синхронизировано</span>
+                {% endif %}
+            </p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+            <form action="{{ url_for('run_ping_all') }}" method="POST" onsubmit="return confirm('Запустить проверку доступности всех хостов через Ansible?');">
+                <button type="submit" class="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg shadow-md shadow-emerald-950/40 transition flex items-center gap-2">
+                    <i class="fa-solid fa-bolt"></i>
+                    <span>SSH Ping всех хостов</span>
+                </button>
+            </form>
+
+            <form action="{{ url_for('sync_zabbix_now') }}" method="POST">
+                <button type="submit" class="px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-md shadow-blue-950/40 transition flex items-center gap-2">
+                    <i class="fa-solid fa-arrows-rotate"></i>
+                    <span>Синхронизировать Zabbix</span>
+                </button>
+            </form>
+
+            <a href="{{ url_for('user_ops_view') }}" class="px-4 py-2.5 bg-purple-600 hover:bg-purple-500 text-white text-sm font-semibold rounded-lg shadow-md shadow-purple-950/40 transition flex items-center gap-2">
+                <i class="fa-solid fa-user-plus"></i>
+                <span>Мастер пользователей</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- Metric Cards Grid -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+        <!-- Total -->
+        <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+            <div class="flex items-center justify-between text-slate-400 mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wider">Всего хостов</span>
+                <i class="fa-solid fa-server text-indigo-400"></i>
+            </div>
+            <div class="text-3xl font-bold text-white">{{ stats.total }}</div>
+            <div class="text-xs text-slate-500 mt-1">в {{ groups|length }} группах</div>
+        </div>
+
+        <!-- Online -->
+        <div class="bg-slate-900 border border-emerald-900/40 p-4 rounded-xl relative overflow-hidden">
+            <div class="absolute top-0 right-0 w-16 h-16 bg-emerald-500/5 rounded-full blur-xl"></div>
+            <div class="flex items-center justify-between text-slate-400 mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wider text-emerald-400">Доступны</span>
+                <i class="fa-solid fa-circle-check text-emerald-400"></i>
+            </div>
+            <div class="text-3xl font-bold text-emerald-400">{{ stats.online }}</div>
+            <div class="text-xs text-slate-500 mt-1">{% if stats.total > 0 %}{{ ((stats.online / stats.total) * 100)|round(1) }}%{% else %}0%{% endif %} от общего</div>
+        </div>
+
+        <!-- Offline -->
+        <div class="bg-slate-900 border border-red-900/40 p-4 rounded-xl relative overflow-hidden">
+            <div class="absolute top-0 right-0 w-16 h-16 bg-red-500/5 rounded-full blur-xl"></div>
+            <div class="flex items-center justify-between text-slate-400 mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wider text-red-400">Недоступны</span>
+                <i class="fa-solid fa-circle-xmark text-red-400"></i>
+            </div>
+            <div class="text-3xl font-bold text-red-400">{{ stats.offline }}</div>
+            <div class="text-xs text-slate-500 mt-1">требуют внимания</div>
+        </div>
+
+        <!-- Unknown -->
+        <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+            <div class="flex items-center justify-between text-slate-400 mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wider">Не проверены</span>
+                <i class="fa-solid fa-circle-question text-slate-400"></i>
+            </div>
+            <div class="text-3xl font-bold text-slate-300">{{ stats.unknown }}</div>
+            <div class="text-xs text-slate-500 mt-1">ожидают проверки</div>
+        </div>
+
+        <!-- Linux -->
+        <div class="bg-slate-900 border border-amber-900/30 p-4 rounded-xl">
+            <div class="flex items-center justify-between text-slate-400 mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wider text-amber-300">Linux</span>
+                <i class="fa-brands fa-linux text-xl text-amber-400"></i>
+            </div>
+            <div class="text-3xl font-bold text-amber-300">{{ stats.linux }}</div>
+            <div class="text-xs text-slate-500 mt-1">Debian / CentOS / etc</div>
+        </div>
+
+        <!-- Windows -->
+        <div class="bg-slate-900 border border-sky-900/30 p-4 rounded-xl">
+            <div class="flex items-center justify-between text-slate-400 mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wider text-sky-400">Windows</span>
+                <i class="fa-brands fa-windows text-xl text-sky-400"></i>
+            </div>
+            <div class="text-3xl font-bold text-sky-400">{{ stats.windows }}</div>
+            <div class="text-xs text-slate-500 mt-1">OpenSSH Server</div>
+        </div>
+    </div>
+
+    <!-- Groups & Companies Breakdown -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <div class="p-5 border-b border-slate-800 flex justify-between items-center">
+            <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-building text-slate-400"></i> Группы компаний Zabbix
+            </h2>
+            <a href="{{ url_for('hosts_view') }}" class="text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1">
+                <span>Все хосты детально</span>
+                <i class="fa-solid fa-arrow-right"></i>
+            </a>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-5">
+            {% for group in groups %}
+            {% set g_hosts = group.hosts.all() %}
+            {% set g_online = g_hosts | selectattr('last_status', 'equalto', 'online') | list | length %}
+            {% set g_offline = g_hosts | selectattr('last_status', 'equalto', 'offline') | list | length %}
+            <div class="bg-slate-950/60 border border-slate-800 p-4 rounded-lg hover:border-slate-700 transition">
+                <div class="flex justify-between items-start mb-2">
+                    <a href="{{ url_for('hosts_view', group_id=group.id) }}" class="font-semibold text-white hover:text-red-400 transition truncate max-w-[200px]" title="{{ group.name }}">
+                        {{ group.name }}
+                    </a>
+                    <span class="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded font-mono">{{ g_hosts|length }} хостов</span>
+                </div>
+                
+                <!-- Progress bar -->
+                {% if g_hosts|length > 0 %}
+                <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden flex my-2.5">
+                    <div class="bg-emerald-500 h-full" style="width: {{ (g_online / g_hosts|length) * 100 }}%"></div>
+                    <div class="bg-red-500 h-full" style="width: {{ (g_offline / g_hosts|length) * 100 }}%"></div>
+                </div>
+                {% endif %}
+
+                <div class="flex justify-between items-center text-xs text-slate-400 mt-2">
+                    <div class="flex items-center gap-2">
+                        <span class="text-emerald-400"><i class="fa-solid fa-circle text-[8px]"></i> {{ g_online }}</span>
+                        <span class="text-red-400"><i class="fa-solid fa-circle text-[8px]"></i> {{ g_offline }}</span>
+                    </div>
+                    <a href="{{ url_for('user_ops_view', group_id=group.id) }}" class="text-xs text-purple-400 hover:text-purple-300 font-medium">
+                        Управление доступом <i class="fa-solid fa-chevron-right text-[10px]"></i>
+                    </a>
+                </div>
+            </div>
+            {% else %}
+            <div class="col-span-full text-center py-8 text-slate-500 text-sm">
+                Хосты ещё не синхронизированы. Нажмите «Синхронизировать Zabbix» для получения списков.
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Recent Execution Tasks -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <div class="p-5 border-b border-slate-800 flex justify-between items-center">
+            <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-clock-rotate-left text-slate-400"></i> Последние выполненные задачи
+            </h2>
+            <a href="{{ url_for('tasks_view') }}" class="text-xs text-red-400 hover:text-red-300 font-semibold flex items-center gap-1">
+                <span>Все задачи</span>
+                <i class="fa-solid fa-arrow-right"></i>
+            </a>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm text-slate-300">
+                <thead class="bg-slate-950/70 text-slate-400 uppercase text-[11px] tracking-wider border-b border-slate-800">
+                    <tr>
+                        <th class="py-3 px-4">ID</th>
+                        <th class="py-3 px-4">Тип задачи</th>
+                        <th class="py-3 px-4">Описание</th>
+                        <th class="py-3 px-4">Инициатор</th>
+                        <th class="py-3 px-4">Статус</th>
+                        <th class="py-3 px-4">Хосты</th>
+                        <th class="py-3 px-4">Время</th>
+                        <th class="py-3 px-4 text-right">Действия</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800">
+                    {% for task in recent_tasks %}
+                    <tr class="hover:bg-slate-800/40 transition">
+                        <td class="py-3 px-4 font-mono text-xs text-slate-400">#{{ task.id }}</td>
+                        <td class="py-3 px-4 font-medium text-white">
+                            {% if task.task_type == 'ping' %}
+                                <span class="text-emerald-400"><i class="fa-solid fa-bolt mr-1"></i> Ping Check</span>
+                            {% elif task.task_type == 'user_create' %}
+                                <span class="text-purple-400"><i class="fa-solid fa-user-plus mr-1"></i> Create User</span>
+                            {% elif task.task_type == 'user_delete' %}
+                                <span class="text-red-400"><i class="fa-solid fa-user-minus mr-1"></i> Delete User</span>
+                            {% else %}
+                                <span class="text-blue-400">{{ task.task_type }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4 text-slate-300 text-xs truncate max-w-xs">{{ task.summary }}</td>
+                        <td class="py-3 px-4 text-xs text-slate-400">{{ task.user.username if task.user else 'System' }}</td>
+                        <td class="py-3 px-4">
+                            {% if task.status == 'success' %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-emerald-950 text-emerald-300 border border-emerald-800">Успех</span>
+                            {% elif task.status == 'running' %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-blue-950 text-blue-300 border border-blue-800 animate-pulse">Выполняется...</span>
+                            {% elif task.status == 'partial' %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-amber-950 text-amber-300 border border-amber-800">Частично</span>
+                            {% elif task.status == 'failed' %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-red-950 text-red-300 border border-red-800">Ошибка</span>
+                            {% else %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-300">В очереди</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4 text-xs">
+                            <span class="text-emerald-400 font-semibold">{{ task.success_count }}</span> / 
+                            <span class="text-slate-400">{{ task.target_count }}</span>
+                            {% if task.failed_count > 0 %}
+                                (<span class="text-red-400 font-semibold">{{ task.failed_count }} fail</span>)
+                            {% endif %}
+                        </td>
+                        <td class="py-3 px-4 text-xs text-slate-400">{{ task.created_at.strftime('%H:%M:%S (%d.%m)') }}</td>
+                        <td class="py-3 px-4 text-right">
+                            <a href="{{ url_for('task_detail', task_id=task.id) }}" class="text-xs text-red-400 hover:text-red-300 font-semibold">
+                                Лог <i class="fa-solid fa-chevron-right text-[10px]"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="text-center py-6 text-slate-500 text-xs">Нет выполненных задач</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

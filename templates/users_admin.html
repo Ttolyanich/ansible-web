@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block title %}Управление пользователями панели{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center bg-slate-900 border border-slate-800 p-5 rounded-xl">
+        <div>
+            <h1 class="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                <i class="fa-solid fa-users-gear text-red-500"></i> Пользователи веб-панели
+            </h1>
+            <p class="text-xs text-slate-400 mt-0.5">Управление учетными записями, ролями (Admin / Operator) и сброс паролей</p>
+        </div>
+
+        <button type="button" onclick="openCreateUserModal()" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5">
+            <i class="fa-solid fa-user-plus"></i>
+            <span>Добавить пользователя</span>
+        </button>
+    </div>
+
+    <!-- Users Table -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <table class="w-full text-left text-sm text-slate-300">
+            <thead class="bg-slate-950/80 text-slate-400 uppercase text-[11px] tracking-wider border-b border-slate-800">
+                <tr>
+                    <th class="py-3 px-4">Логин</th>
+                    <th class="py-3 px-4">Роль</th>
+                    <th class="py-3 px-4">Статус</th>
+                    <th class="py-3 px-4">Дата создания</th>
+                    <th class="py-3 px-4 text-right">Действия</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800">
+                {% for u in users %}
+                <tr class="hover:bg-slate-800/40 transition">
+                    <td class="py-3 px-4 font-semibold text-white flex items-center gap-2">
+                        <i class="fa-solid fa-circle-user text-slate-400 text-lg"></i>
+                        <span>{{ u.username }}</span>
+                        {% if u.id == current_user.id %}
+                        <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">Вы</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 px-4">
+                        {% if u.role == 'admin' %}
+                            <span class="px-2 py-0.5 rounded text-xs bg-purple-950 text-purple-300 border border-purple-800 font-semibold">Администратор</span>
+                        {% else %}
+                            <span class="px-2 py-0.5 rounded text-xs bg-blue-950 text-blue-300 border border-blue-800 font-semibold">Оператор</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 px-4">
+                        {% if u.is_active %}
+                            <span class="text-xs text-emerald-400"><i class="fa-solid fa-circle text-[8px] mr-1"></i> Активен</span>
+                        {% else %}
+                            <span class="text-xs text-red-400"><i class="fa-solid fa-circle text-[8px] mr-1"></i> Заблокирован</span>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 px-4 text-xs text-slate-400">{{ u.created_at.strftime('%d.%m.%Y') }}</td>
+                    <td class="py-3 px-4 text-right space-x-2">
+                        <button type="button" onclick="openResetModal('{{ u.id }}', '{{ u.username }}')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded transition" title="Сбросить пароль">
+                            <i class="fa-solid fa-key"></i> Сброс пароля
+                        </button>
+                        {% if u.id != current_user.id %}
+                        <form action="{{ url_for('delete_panel_user', user_id=u.id) }}" method="POST" class="inline" onsubmit="return confirm('Удалить пользователя {{ u.username }}?');">
+                            <button type="submit" class="px-2.5 py-1 bg-slate-800 hover:bg-red-950 hover:text-red-400 text-slate-400 text-xs rounded transition">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Modal Create User -->
+<div id="create-user-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+        <div class="flex justify-between items-center pb-3 border-b border-slate-800">
+            <h3 class="text-lg font-bold text-white">Новый пользователь панели</h3>
+            <button onclick="closeCreateUserModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <form method="POST" action="{{ url_for('create_panel_user') }}" class="space-y-4 text-xs">
+            <div>
+                <label class="block text-slate-300 font-semibold mb-1">Имя пользователя (Логин) <span class="text-red-500">*</span></label>
+                <input type="text" name="username" required placeholder="operator1"
+                       class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+            </div>
+
+            <div>
+                <label class="block text-slate-300 font-semibold mb-1">Пароль <span class="text-red-500">*</span></label>
+                <input type="password" name="password" required placeholder="••••••••"
+                       class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+            </div>
+
+            <div>
+                <label class="block text-slate-300 font-semibold mb-1">Роль в системе</label>
+                <select name="role" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+                    <option value="operator">Оператор (запуск пингов, создание/удаление учеток на хостах)</option>
+                    <option value="admin">Администратор (полный доступ + настройка Zabbix и ключей)</option>
+                </select>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-4 border-t border-slate-800">
+                <button type="button" onclick="closeCreateUserModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg">Отмена</button>
+                <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg">Создать</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal Reset Password -->
+<div id="reset-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+        <div class="flex justify-between items-center pb-3 border-b border-slate-800">
+            <h3 class="text-lg font-bold text-white">Сброс пароля пользователя</h3>
+            <button onclick="closeResetModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <form method="POST" action="{{ url_for('reset_user_password') }}" class="space-y-4 text-xs">
+            <input type="hidden" name="user_id" id="reset-user-id" value="">
+            <div>
+                <div class="text-slate-400 mb-2">Пользователь: <span id="reset-username" class="text-white font-bold"></span></div>
+                <label class="block text-slate-300 font-semibold mb-1">Новый пароль <span class="text-red-500">*</span></label>
+                <input type="password" name="new_password" required placeholder="Введите новый пароль..."
+                       class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+            </div>
+
+            <div class="flex justify-end gap-2 pt-4 border-t border-slate-800">
+                <button type="button" onclick="closeResetModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg">Отмена</button>
+                <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg">Сбросить пароль</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function openCreateUserModal() {
+        document.getElementById('create-user-modal').classList.remove('hidden');
+    }
+    function closeCreateUserModal() {
+        document.getElementById('create-user-modal').classList.add('hidden');
+    }
+
+    function openResetModal(userId, username) {
+        document.getElementById('reset-user-id').value = userId;
+        document.getElementById('reset-username').innerText = username;
+        document.getElementById('reset-modal').classList.remove('hidden');
+    }
+    function closeResetModal() {
+        document.getElementById('reset-modal').classList.add('hidden');
+    }
+</script>
+{% endblock %}

@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block title %}Хосты и серверы{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Top Action & Search Bar -->
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900 border border-slate-800 p-5 rounded-xl">
+        <div>
+            <h1 class="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                <i class="fa-solid fa-server text-red-500"></i> Инвентарь серверов
+            </h1>
+            <p class="text-xs text-slate-400 mt-0.5">Отображено: {{ hosts|length }} хостов</p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
+            <form action="{{ url_for('sync_zabbix_now') }}" method="POST">
+                <button type="submit" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-arrows-rotate text-blue-400"></i>
+                    <span>Обновить из Zabbix</span>
+                </button>
+            </form>
+            <button type="button" onclick="submitBatchAction('ping')" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5">
+                <i class="fa-solid fa-bolt"></i>
+                <span>Ping выбранных (<span id="selected-count-ping">0</span>)</span>
+            </button>
+            <button type="button" onclick="submitBatchAction('user_ops')" class="px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5">
+                <i class="fa-solid fa-user-gear"></i>
+                <span>Учетки на выбранных (<span id="selected-count-user">0</span>)</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Filters Bar -->
+    <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+        <form method="GET" action="{{ url_for('hosts_view') }}" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+            <!-- Search Query -->
+            <div>
+                <label class="block text-slate-400 font-semibold mb-1">Поиск</label>
+                <input type="text" name="q" value="{{ filter_q }}" placeholder="Имя сервера или IP..."
+                       class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-red-500">
+            </div>
+
+            <!-- Group / Company Filter -->
+            <div>
+                <label class="block text-slate-400 font-semibold mb-1">Группа / Компания</label>
+                <select name="group_id" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-1 focus:ring-red-500">
+                    <option value="">Все группы</option>
+                    {% for g in groups %}
+                    <option value="{{ g.id }}" {% if filter_group_id|string == g.id|string %}selected{% endif %}>{{ g.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- OS Filter -->
+            <div>
+                <label class="block text-slate-400 font-semibold mb-1">Тип ОС</label>
+                <select name="os" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-1 focus:ring-red-500">
+                    <option value="">Любая ОС</option>
+                    <option value="linux" {% if filter_os == 'linux' %}selected{% endif %}>🐧 Linux</option>
+                    <option value="windows" {% if filter_os == 'windows' %}selected{% endif %}>🪟 Windows</option>
+                    <option value="unknown" {% if filter_os == 'unknown' %}selected{% endif %}>❓ Неизвестно</option>
+                </select>
+            </div>
+
+            <!-- Status Filter -->
+            <div>
+                <label class="block text-slate-400 font-semibold mb-1">Статус SSH</label>
+                <select name="status" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-1 focus:ring-red-500">
+                    <option value="">Любой статус</option>
+                    <option value="online" {% if filter_status == 'online' %}selected{% endif %}>🟢 Доступен (Online)</option>
+                    <option value="offline" {% if filter_status == 'offline' %}selected{% endif %}>🔴 Недоступен (Offline)</option>
+                    <option value="unknown" {% if filter_status == 'unknown' %}selected{% endif %}>⚪ Не проверен</option>
+                </select>
+            </div>
+
+            <!-- Submit Filter -->
+            <div class="flex items-end gap-2">
+                <button type="submit" class="w-full py-2 px-3 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg transition">
+                    Применить
+                </button>
+                <a href="{{ url_for('hosts_view') }}" class="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition" title="Сбросить">
+                    <i class="fa-solid fa-rotate-left"></i>
+                </a>
+            </div>
+        </form>
+    </div>
+
+    <!-- Hosts Table -->
+    <form id="batch-form" method="POST" action="">
+        <input type="hidden" name="action_type" id="form-action-type" value="">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm text-slate-300">
+                    <thead class="bg-slate-950/80 text-slate-400 uppercase text-[11px] tracking-wider border-b border-slate-800">
+                        <tr>
+                            <th class="py-3 px-4 w-10">
+                                <input type="checkbox" id="select-all" class="rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-red-500">
+                            </th>
+                            <th class="py-3 px-4">Имя сервера</th>
+                            <th class="py-3 px-4">IP адрес</th>
+                            <th class="py-3 px-4">ОС</th>
+                            <th class="py-3 px-4">Группа компании</th>
+                            <th class="py-3 px-4">Статус SSH</th>
+                            <th class="py-3 px-4">Профиль кредов</th>
+                            <th class="py-3 px-4 text-right">Настройки</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800">
+                        {% for host in hosts %}
+                        <tr class="hover:bg-slate-800/40 transition">
+                            <td class="py-3 px-4">
+                                <input type="checkbox" name="host_ids" value="{{ host.id }}" class="host-checkbox rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-red-500">
+                            </td>
+                            <td class="py-3 px-4 font-semibold text-white">
+                                <a href="{{ url_for('host_detail', host_id=host.id) }}" class="hover:text-red-400 transition">
+                                    {{ host.name }}
+                                </a>
+                                <span class="text-[10px] text-slate-500 font-mono block">ID: {{ host.zabbix_hostid }}</span>
+                            </td>
+                            <td class="py-3 px-4 font-mono text-xs text-slate-300">{{ host.ip_address }}</td>
+                            <td class="py-3 px-4">
+                                {% if host.os_type == 'linux' %}
+                                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800">
+                                        <i class="fa-brands fa-linux"></i> Linux
+                                    </span>
+                                {% elif host.os_type == 'windows' %}
+                                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-sky-950/80 text-sky-300 border border-sky-800">
+                                        <i class="fa-brands fa-windows"></i> Windows
+                                    </span>
+                                {% else %}
+                                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                                        <i class="fa-solid fa-question"></i> Неизвестно
+                                    </span>
+                                {% endif %}
+                            </td>
+                            <td class="py-3 px-4 text-xs text-slate-300">
+                                {{ host.group.name if host.group else '-' }}
+                            </td>
+                            <td class="py-3 px-4 text-xs">
+                                {% if host.last_status == 'online' %}
+                                    <span class="inline-flex items-center gap-1 text-emerald-400 font-semibold" title="Проверено: {{ host.last_checked_at.strftime('%d.%m %H:%M') if host.last_checked_at else '' }}">
+                                        <span class="w-2 h-2 rounded-full bg-emerald-500"></span> Online
+                                    </span>
+                                {% elif host.last_status == 'offline' %}
+                                    <span class="inline-flex items-center gap-1 text-red-400 font-semibold" title="{{ host.last_error or 'SSH unreachable' }}">
+                                        <span class="w-2 h-2 rounded-full bg-red-500"></span> Offline
+                                    </span>
+                                {% else %}
+                                    <span class="inline-flex items-center gap-1 text-slate-500 font-medium">
+                                        <span class="w-2 h-2 rounded-full bg-slate-600"></span> Unknown
+                                    </span>
+                                {% endif %}
+                                {% if host.last_checked_at %}
+                                    <span class="text-[10px] text-slate-500 block">{{ host.last_checked_at.strftime('%d.%m %H:%M') }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="py-3 px-4 text-xs">
+                                {% if host.override_credential %}
+                                    <span class="px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800 font-mono text-[10px]">
+                                        {{ host.override_credential.name }}
+                                    </span>
+                                {% elif host.group and host.group.credential %}
+                                    <span class="px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800 font-mono text-[10px]">
+                                        Группа: {{ host.group.credential.name }}
+                                    </span>
+                                {% else %}
+                                    <span class="text-slate-500 text-[11px]">По умолчанию ({{ host.os_type }})</span>
+                                {% endif %}
+                            </td>
+                            <td class="py-3 px-4 text-right">
+                                <a href="{{ url_for('host_detail', host_id=host.id) }}" class="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition" title="Настройки подключения">
+                                    <i class="fa-solid fa-sliders"></i>
+                                </a>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="8" class="text-center py-10 text-slate-500 text-sm">
+                                Хосты не найдены по заданным критериям фильтрации
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    const selectAll = document.getElementById('select-all');
+    const checkboxes = document.querySelectorAll('.host-checkbox');
+    const countPing = document.getElementById('selected-count-ping');
+    const countUser = document.getElementById('selected-count-user');
+
+    function updateCount() {
+        let count = 0;
+        checkboxes.forEach(cb => { if (cb.checked) count++; });
+        countPing.innerText = count;
+        countUser.innerText = count;
+    }
+
+    if (selectAll) {
+        selectAll.addEventListener('change', function() {
+            checkboxes.forEach(cb => cb.checked = selectAll.checked);
+            updateCount();
+        });
+    }
+
+    checkboxes.forEach(cb => {
+        cb.addEventListener('change', updateCount);
+    });
+
+    function submitBatchAction(type) {
+        let checked = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.value);
+        if (checked.length === 0) {
+            alert('Пожалуйста, выберите хотя бы один хост из таблицы!');
+            return;
+        }
+
+        const form = document.getElementById('batch-form');
+        if (type === 'ping') {
+            if (!confirm(`Запустить быструю проверку SSH для ${checked.length} хостов?`)) return;
+            form.action = "{{ url_for('run_ping_batch') }}";
+            form.submit();
+        } else if (type === 'user_ops') {
+            form.action = "{{ url_for('user_ops_view') }}";
+            form.method = "POST";
+            form.submit();
+        }
+    }
+</script>
+{% endblock %}

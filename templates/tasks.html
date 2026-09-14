@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}История задач{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex justify-between items-center bg-slate-900 border border-slate-800 p-5 rounded-xl">
+        <div>
+            <h1 class="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                <i class="fa-solid fa-list-check text-red-500"></i> Журнал фоновых задач Ansible
+            </h1>
+            <p class="text-xs text-slate-400 mt-0.5">Всего записей: {{ tasks|length }}</p>
+        </div>
+
+        <a href="{{ url_for('tasks_view') }}" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+            <i class="fa-solid fa-rotate-right"></i>
+            <span>Обновить статус</span>
+        </a>
+    </div>
+
+    <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm text-slate-300">
+                <thead class="bg-slate-950/80 text-slate-400 uppercase text-[11px] tracking-wider border-b border-slate-800">
+                    <tr>
+                        <th class="py-3.5 px-4 w-16">ID</th>
+                        <th class="py-3.5 px-4">Тип задачи</th>
+                        <th class="py-3.5 px-4">Описание</th>
+                        <th class="py-3.5 px-4">Инициатор</th>
+                        <th class="py-3.5 px-4">Статус</th>
+                        <th class="py-3.5 px-4">Успешно / Целей</th>
+                        <th class="py-3.5 px-4">Запуск</th>
+                        <th class="py-3.5 px-4 text-right">Лог</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800">
+                    {% for task in tasks %}
+                    <tr class="hover:bg-slate-800/40 transition">
+                        <td class="py-3.5 px-4 font-mono text-xs text-slate-400">#{{ task.id }}</td>
+                        <td class="py-3.5 px-4 font-semibold text-white">
+                            {% if task.task_type == 'ping' %}
+                                <span class="text-emerald-400"><i class="fa-solid fa-bolt mr-1"></i> SSH Ping</span>
+                            {% elif task.task_type == 'user_create' %}
+                                <span class="text-purple-400"><i class="fa-solid fa-user-plus mr-1"></i> Create User</span>
+                            {% elif task.task_type == 'user_delete' %}
+                                <span class="text-red-400"><i class="fa-solid fa-user-minus mr-1"></i> Delete User</span>
+                            {% elif task.task_type == 'zabbix_sync' %}
+                                <span class="text-blue-400"><i class="fa-solid fa-arrows-rotate mr-1"></i> Zabbix Sync</span>
+                            {% else %}
+                                <span>{{ task.task_type }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3.5 px-4 text-xs text-slate-300 truncate max-w-sm">{{ task.summary }}</td>
+                        <td class="py-3.5 px-4 text-xs text-slate-400">{{ task.user.username if task.user else 'System' }}</td>
+                        <td class="py-3.5 px-4">
+                            {% if task.status == 'success' %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold">Успех</span>
+                            {% elif task.status == 'running' %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-blue-950 text-blue-300 border border-blue-800 font-semibold animate-pulse">Выполняется...</span>
+                            {% elif task.status == 'partial' %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-amber-950 text-amber-300 border border-amber-800 font-semibold">Частично</span>
+                            {% elif task.status == 'failed' %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-red-950 text-red-300 border border-red-800 font-semibold">Ошибка</span>
+                            {% else %}
+                                <span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-300">В очереди</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-3.5 px-4 text-xs">
+                            <span class="text-emerald-400 font-semibold">{{ task.success_count }}</span> / 
+                            <span class="text-slate-300">{{ task.target_count }}</span>
+                            {% if task.failed_count > 0 %}
+                                (<span class="text-red-400 font-semibold">{{ task.failed_count }} fail</span>)
+                            {% endif %}
+                        </td>
+                        <td class="py-3.5 px-4 text-xs text-slate-400">{{ task.created_at.strftime('%d.%m.%Y %H:%M:%S') }}</td>
+                        <td class="py-3.5 px-4 text-right">
+                            <a href="{{ url_for('task_detail', task_id=task.id) }}" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition">
+                                Подробнее
+                            </a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="text-center py-10 text-slate-500 text-sm">История задач пуста</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

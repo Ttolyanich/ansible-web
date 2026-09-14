@@ -1,0 +1,30 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# Database & Instances (Keep private keys & DB local)
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment Variables & Secrets
+.env
+keys/
+temp/
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
