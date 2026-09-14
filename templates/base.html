@@ -183,21 +183,23 @@
         </header>
         {% endif %}
 
-        <!-- Flash Messages Container -->
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4 w-full">
+        <!-- Floating Toast Notifications (Top-Right) -->
+        <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none px-4 sm:px-0">
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
-                    <div class="space-y-2 mb-4">
-                        {% for category, message in messages %}
-                            <div class="flex items-center justify-between p-4 rounded-lg border text-sm {% if category == 'error' or category == 'danger' %}bg-red-950/80 border-red-800 text-red-200{% elif category == 'success' %}bg-emerald-950/80 border-emerald-800 text-emerald-200{% else %}bg-blue-950/80 border-blue-800 text-blue-200{% endif %}" role="alert">
-                                <div class="flex items-center space-x-3">
-                                    <i class="fa-solid {% if category == 'error' or category == 'danger' %}fa-circle-xmark text-red-400{% elif category == 'success' %}fa-circle-check text-emerald-400{% else %}fa-circle-info text-blue-400{% endif %} text-lg"></i>
-                                    <span>{{ message }}</span>
-                                </div>
-                                <button onclick="this.parentElement.remove()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                    {% for category, message in messages %}
+                        <div class="toast-item pointer-events-auto flex items-start space-x-3 p-3.5 rounded-xl border shadow-2xl backdrop-blur-md transition-all duration-300 transform translate-x-0 opacity-100 {% if category == 'error' or category == 'danger' %}bg-red-950/95 border-red-800 text-red-100 shadow-red-950/50{% elif category == 'success' %}bg-emerald-950/95 border-emerald-800 text-emerald-100 shadow-emerald-950/50{% elif category == 'warning' %}bg-amber-950/95 border-amber-800 text-amber-100 shadow-amber-950/50{% else %}bg-slate-900/95 border-slate-700 text-slate-100 shadow-slate-950/50{% endif %}">
+                            <div class="shrink-0 mt-0.5">
+                                <i class="fa-solid {% if category == 'error' or category == 'danger' %}fa-circle-xmark text-red-400{% elif category == 'success' %}fa-circle-check text-emerald-400{% elif category == 'warning' %}fa-triangle-exclamation text-amber-400{% else %}fa-circle-info text-blue-400{% endif %} text-base"></i>
                             </div>
-                        {% endfor %}
-                    </div>
+                            <div class="flex-1 text-xs font-medium leading-relaxed pr-2">
+                                {{ message }}
+                            </div>
+                            <button type="button" onclick="dismissToast(this.closest('.toast-item'))" class="shrink-0 text-slate-400 hover:text-white p-0.5 rounded transition">
+                                <i class="fa-solid fa-xmark text-xs"></i>
+                            </button>
+                        </div>
+                    {% endfor %}
                 {% endif %}
             {% endwith %}
         </div>
@@ -231,6 +233,22 @@
             sidebar.classList.toggle('hidden');
             backdrop.classList.toggle('hidden');
         }
+
+        function dismissToast(el) {
+            if (!el) return;
+            el.style.opacity = '0';
+            el.style.transform = 'translateX(100%)';
+            setTimeout(() => { if (el.parentElement) el.remove(); }, 300);
+        }
+
+        // Auto dismiss toasts after 4 seconds
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.toast-item').forEach((toast, idx) => {
+                setTimeout(() => {
+                    dismissToast(toast);
+                }, 4000 + (idx * 600));
+            });
+        });
     </script>
     {% block extra_scripts %}{% endblock %}
 </body>

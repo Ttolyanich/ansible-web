@@ -130,11 +130,53 @@ def generate_inventory(hosts: list, temp_dir: str, db_session) -> str:
     return inventory_file
 
 
+def extract_host_errors(output: str) -> Dict[str, str]:
+    """Extract human-readable error reason per host from Ansible log output."""
+    errors = {}
+    lines = output.splitlines()
+    for line in lines:
+        line_clean = line.strip()
+        if line_clean.startswith("fatal: [") or line_clean.startswith("failed: ["):
+            try:
+                start_bracket = line_clean.find("[") + 1
+                end_bracket = line_clean.find("]")
+                hostname = line_clean[start_bracket:end_bracket].strip()
+                rest = line_clean[end_bracket+1:]
+
+                if "Permission denied" in rest:
+                    err_text = "Permission denied (проверьте SSH-ключ / пароль)"
+                elif "timed out" in rest.lower() or "timeout" in rest.lower():
+                    err_text = "Connection timed out (хост не отвечает по SSH)"
+                elif "Connection refused" in rest:
+                    err_text = "Connection refused (порт SSH закрыт)"
+                elif "No route to host" in rest:
+                    err_text = "No route to host (сеть недоступна)"
+                elif "Host key verification failed" in rest:
+                    err_text = "Host key verification failed"
+                elif '"msg":' in rest:
+                    try:
+                        idx_json = rest.find("{")
+                        if idx_json != -1:
+                            data = json.loads(rest[idx_json:])
+                            raw_msg = data.get("msg", "")
+                            err_text = raw_msg.splitlines()[-1] if raw_msg else rest[:120]
+                    except Exception:
+                        err_text = rest[:120]
+                else:
+                    err_text = rest[:120]
+
+                errors[hostname] = err_text
+            except Exception:
+                pass
+    return errors
+
+
 def parse_ansible_recap(output: str) -> Dict[str, Dict[str, Any]]:
     """Parse PLAY RECAP line by line to extract status of each host."""
     results = {}
     lines = output.splitlines()
     in_recap = False
+    host_errors = extract_host_errors(output)
 
     for line in lines:
         if "PLAY RECAP" in line:
@@ -157,22 +199,27 @@ def parse_ansible_recap(output: str) -> Dict[str, Dict[str, Any]]:
 
                 unreachable = stats.get("unreachable", 0) > 0
                 failed = stats.get("failed", 0) > 0
+                ignored = stats.get("ignored", 0) > 0
                 ok = stats.get("ok", 0) > 0
                 changed = stats.get("changed", 0) > 0
 
+                # If unreachable, failed, or ignored errors occurred, host is NOT ok!
                 if unreachable:
                     status = "unreachable"
-                elif failed:
+                elif failed or ignored:
                     status = "failed"
-                elif ok or changed:
+                elif (ok or changed) and not ignored:
                     status = "ok"
                 else:
                     status = "unknown"
 
+                err_msg = host_errors.get(hostname) or stats_str
+
                 results[hostname] = {
                     "status": status,
                     "stats": stats,
-                    "summary": stats_str
+                    "summary": stats_str,
+                    "error": err_msg if status != "ok" else None
                 }
 
     return results
@@ -271,7 +318,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                     if task.task_type == "ping":
                         h.last_status = "offline"
                         h.last_checked_at = now
-                        h.last_error = res.get("summary")
+                        h.last_error = res.get("error") or res.get("summary")
 
             task.success_count = success_count
             task.failed_count = failed_count
