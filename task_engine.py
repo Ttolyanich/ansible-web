@@ -112,12 +112,20 @@ def generate_inventory(hosts: list, temp_dir: str, db_session) -> str:
                         key_content.encode("utf-8"),
                         password=creds["passphrase"].encode("utf-8")
                     )
-                    key_content = loaded_key.private_bytes(
-                        encoding=serialization.Encoding.PEM,
-                        format=serialization.PrivateFormat.PKCS8,
-                        encryption_algorithm=serialization.NoEncryption()
-                    ).decode("utf-8")
-                except Exception:
+                    try:
+                        key_content = loaded_key.private_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PrivateFormat.OpenSSH,
+                            encryption_algorithm=serialization.NoEncryption()
+                        ).decode("utf-8")
+                    except Exception:
+                        key_content = loaded_key.private_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PrivateFormat.PKCS8,
+                            encryption_algorithm=serialization.NoEncryption()
+                        ).decode("utf-8")
+                except Exception as ex:
+                    logger.warning(f"Failed to decrypt private key for {host.name}: {ex}")
                     # Fallback to passing passphrase parameter
                     host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
 
