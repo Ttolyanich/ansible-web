@@ -393,6 +393,7 @@ def create_credential():
     ssh_port = int(request.form.get("ssh_port", 22))
     become_method = request.form.get("become_method", "sudo")
     private_key = request.form.get("private_key", "").strip()
+    passphrase = request.form.get("passphrase", "").strip()
     password = request.form.get("password", "").strip()
     sudo_password = request.form.get("sudo_password", "").strip()
     is_default = request.form.get("is_default") == "1"
@@ -412,6 +413,8 @@ def create_credential():
     if private_key:
         profile.private_key = private_key
         profile.auth_type = "key"
+        if passphrase:
+            profile.passphrase = passphrase
     elif password:
         profile.password = password
         profile.auth_type = "password"

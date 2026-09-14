@@ -37,6 +37,7 @@ def resolve_credentials(host, db_session) -> Dict[str, Any]:
         "port": 22,
         "auth_type": "key",
         "private_key": "",
+        "passphrase": "",
         "password": "",
         "sudo_password": "",
         "become_method": "sudo" if host.os_type == "linux" else "none"
@@ -47,6 +48,7 @@ def resolve_credentials(host, db_session) -> Dict[str, Any]:
         creds["port"] = profile.ssh_port or 22
         creds["auth_type"] = profile.auth_type or "key"
         creds["private_key"] = profile.private_key or ""
+        creds["passphrase"] = profile.passphrase or ""
         creds["password"] = profile.password or ""
         creds["sudo_password"] = profile.sudo_password or ""
         creds["become_method"] = profile.become_method or creds["become_method"]
@@ -77,15 +79,35 @@ def generate_inventory(hosts: list, temp_dir: str, db_session) -> str:
 
         # Handle Private Key
         if creds["auth_type"] == "key" and creds["private_key"]:
+            key_content = creds["private_key"].strip() + "\n"
+            
+            # If private key has a passphrase, decrypt it in-memory for the temporary key file
+            if creds.get("passphrase"):
+                try:
+                    from cryptography.hazmat.primitives import serialization
+                    loaded_key = serialization.load_ssh_private_key(
+                        key_content.encode("utf-8"),
+                        password=creds["passphrase"].encode("utf-8")
+                    )
+                    key_content = loaded_key.private_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PrivateFormat.PKCS8,
+                        encryption_algorithm=serialization.NoEncryption()
+                    ).decode("utf-8")
+                except Exception:
+                    # Fallback to passing passphrase parameter
+                    host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
+
             key_file = os.path.join(keys_dir, f"key_{host.id}")
             with open(key_file, "w", encoding="utf-8") as kf:
-                # Ensure trailing newline
-                kf.write(creds["private_key"].strip() + "\n")
+                kf.write(key_content)
             try:
                 os.chmod(key_file, 0o600)
             except Exception:
                 pass
             host_vars["ansible_ssh_private_key_file"] = key_file
+            if creds.get("passphrase"):
+                host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
         elif creds["password"]:
             host_vars["ansible_password"] = creds["password"]
             host_vars["ansible_ssh_common_args"] = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5"
