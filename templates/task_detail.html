@@ -98,7 +98,15 @@
                                     </span>
                                     <span class="text-[10px] text-slate-500 block mt-0.5">{{ res.summary }}</span>
                                 {% else %}
-                                    <span class="text-slate-400">{{ res.summary or '-' }}</span>
+                                    {% if res.matched_profile %}
+                                        <span class="text-emerald-400 font-semibold flex items-center gap-1.5">
+                                            <i class="fa-solid fa-key text-[11px]"></i>
+                                            <span>{{ res.matched_profile }} ({{ res.matched_user }})</span>
+                                        </span>
+                                        <span class="text-[10px] text-slate-500 block mt-0.5">{{ res.summary or 'ok' }}</span>
+                                    {% else %}
+                                        <span class="text-slate-400">{{ res.summary or '-' }}</span>
+                                    {% endif %}
                                 {% endif %}
                             </td>
                         </tr>

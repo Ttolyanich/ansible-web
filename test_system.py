@@ -114,12 +114,50 @@ def test_inventory_generation():
         print(f"  [OK] Dynamic inventory generated and validated:\n{yaml.dump(inv_data, default_flow_style=False)}")
         shutil.rmtree(temp_dir)
 
+def test_candidate_credentials_fallback():
+    print("\n--- 5. Testing Candidate Credentials Fallback Resolution ---")
+    from app import app, db
+    from models import Host, CredentialProfile
+    from task_engine import get_candidate_credentials
+
+    with app.app_context():
+        # Setup 2 profiles for Linux: root (key) and itsgsrv (password)
+        p_root = CredentialProfile(name="P_Root", os_type="linux", ssh_user="root", is_default=True, auth_type="key")
+        p_root.private_key = "dummy-private-key"
+        p_itsgsrv = CredentialProfile(name="P_Itsgsrv", os_type="linux", ssh_user="itsgsrv", is_default=False, auth_type="password")
+        p_itsgsrv.password = "secret123"
+        
+        db.session.add(p_root)
+        db.session.add(p_itsgsrv)
+        db.session.commit()
+
+        test_host = Host.query.filter_by(zabbix_hostid="test-host-1").first()
+        assert test_host is not None
+
+        cands = get_candidate_credentials(test_host, db.session)
+        assert len(cands) >= 2, f"Expected at least 2 candidates, got {len(cands)}"
+        assert cands[0]["user"] == "root", f"First candidate must be default (root), got {cands[0]['user']}"
+        assert cands[0]["auth_type"] == "key"
+        
+        # Check that itsgsrv is among fallback candidates
+        itsg_cand = next((c for c in cands if c["user"] == "itsgsrv"), None)
+        assert itsg_cand is not None, "itsgsrv must be in fallback candidate list!"
+        assert itsg_cand["auth_type"] == "password"
+        assert itsg_cand["password"] == "secret123"
+
+        print(f"  [OK] Fallback candidate credentials verified: {[c['user'] + ' (' + c['auth_type'] + ')' for c in cands]}")
+
+        db.session.delete(p_root)
+        db.session.delete(p_itsgsrv)
+        db.session.commit()
+
 if __name__ == "__main__":
     try:
         test_syntax()
         test_models_and_crypto()
         test_database_and_bootstrap()
         test_inventory_generation()
+        test_candidate_credentials_fallback()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")

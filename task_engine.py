@@ -32,15 +32,11 @@ def resolve_credentials(host, db_session) -> Dict[str, Any]:
     elif host.group and host.group.credential:
         profile = host.group.credential
     else:
-        # 1. Try default profile for this OS
         profile = CredentialProfile.query.filter_by(os_type=target_os, is_default=True).first()
-        # 2. Fallback to any profile matching this OS
         if not profile:
             profile = CredentialProfile.query.filter_by(os_type=target_os).first()
-        # 3. Fallback to any default profile
         if not profile:
             profile = CredentialProfile.query.filter_by(is_default=True).first()
-        # 4. Fallback to any profile in DB
         if not profile:
             profile = CredentialProfile.query.first()
 
@@ -68,7 +64,96 @@ def resolve_credentials(host, db_session) -> Dict[str, Any]:
     return creds
 
 
-def generate_inventory(hosts: list, temp_dir: str, db_session) -> str:
+def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
+    """
+    Returns an ordered list of candidate credential dictionaries to try for this host.
+    Prioritizes:
+    1. Assigned host profile (if set)
+    2. Assigned group profile (if set)
+    3. Default profile for host's OS
+    4. Other profiles matching host's OS
+    For each profile, prepares variants (key auth vs password auth) based on profile.auth_type and available secrets.
+    """
+    from models import CredentialProfile
+
+    target_os = host.os_type if host.os_type in ("linux", "windows") else "linux"
+    profiles_to_try = []
+
+    # 1. Primary profile
+    primary_profile = None
+    if host.override_credential:
+        primary_profile = host.override_credential
+    elif host.group and host.group.credential:
+        primary_profile = host.group.credential
+    else:
+        primary_profile = CredentialProfile.query.filter_by(os_type=target_os, is_default=True).first()
+
+    if primary_profile:
+        profiles_to_try.append(primary_profile)
+
+    # 2. All other profiles matching target_os
+    other_profiles = CredentialProfile.query.filter_by(os_type=target_os).order_by(
+        CredentialProfile.is_default.desc(), 
+        CredentialProfile.id
+    ).all()
+    for p in other_profiles:
+        if primary_profile and p.id == primary_profile.id:
+            continue
+        profiles_to_try.append(p)
+
+    candidates = []
+
+    def make_cred_dict(prof, auth_mode: str) -> Dict[str, Any]:
+        return {
+            "profile_id": prof.id if prof else None,
+            "profile_name": prof.name if prof else "System Default",
+            "user": (prof.ssh_user if prof else None) or ("root" if target_os == "linux" else "Administrator"),
+            "port": (prof.ssh_port if prof else None) or 22,
+            "auth_type": auth_mode,
+            "private_key": prof.private_key if prof else "",
+            "passphrase": prof.passphrase if prof else "",
+            "password": prof.password if prof else "",
+            "sudo_password": prof.sudo_password if prof else "",
+            "become_method": (prof.become_method if prof else None) or ("sudo" if target_os == "linux" else "none")
+        }
+
+    for prof in profiles_to_try:
+        has_key = bool(prof.private_key and prof.private_key.strip())
+        has_pwd = bool(prof.password and prof.password.strip())
+        pref_auth = prof.auth_type or "key"
+
+        if pref_auth == "password":
+            if has_pwd:
+                candidates.append(make_cred_dict(prof, "password"))
+            if has_key:
+                candidates.append(make_cred_dict(prof, "key"))
+        else:
+            if has_key:
+                candidates.append(make_cred_dict(prof, "key"))
+            if has_pwd:
+                candidates.append(make_cred_dict(prof, "password"))
+
+        if not has_key and not has_pwd:
+            candidates.append(make_cred_dict(prof, pref_auth))
+
+    if not candidates:
+        candidates.append({
+            "profile_id": None,
+            "profile_name": "Built-in Default",
+            "user": "root" if target_os == "linux" else "Administrator",
+            "port": 22,
+            "auth_type": "key",
+            "private_key": "",
+            "passphrase": "",
+            "password": "",
+            "sudo_password": "",
+            "become_method": "sudo" if target_os == "linux" else "none"
+        })
+
+    return candidates
+
+
+def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: Optional[Dict[str, dict]] = None) -> str:
     """Generate YAML inventory file with resolved credentials and SSH options."""
     inventory_data = {
         "all": {
@@ -89,7 +174,11 @@ def generate_inventory(hosts: list, temp_dir: str, db_session) -> str:
         pass
 
     for host in hosts:
-        creds = resolve_credentials(host, db_session)
+        if host_creds_map and host.name in host_creds_map:
+            creds = host_creds_map[host.name]
+        else:
+            creds = resolve_credentials(host, db_session)
+
         target_os = host.os_type if host.os_type in ("linux", "windows") else "linux"
 
         host_vars = {
@@ -97,11 +186,11 @@ def generate_inventory(hosts: list, temp_dir: str, db_session) -> str:
             "ansible_port": creds["port"],
             "ansible_user": creds["user"],
             "os_type": target_os,
-            "ansible_ssh_common_args": "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes"
+            "ansible_ssh_common_args": "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5"
         }
 
-        # Handle Private Key
-        if creds["auth_type"] == "key" and creds["private_key"]:
+        # Handle Private Key vs Password
+        if creds.get("auth_type") == "key" and creds.get("private_key"):
             key_content = creds["private_key"].strip() + "\n"
             
             # If private key has a passphrase, decrypt it in-memory for the temporary key file
@@ -126,35 +215,53 @@ def generate_inventory(hosts: list, temp_dir: str, db_session) -> str:
                         ).decode("utf-8")
                 except Exception as ex:
                     logger.warning(f"Failed to decrypt private key for {host.name}: {ex}")
-                    # Fallback to passing passphrase parameter
-                    host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
+                    if creds.get("passphrase"):
+                        host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
 
-            key_file = os.path.join(keys_dir, f"key_{host.id}")
+            key_file = os.path.join(keys_dir, f"key_{host.id}_{abs(hash(creds['user'])) % 10000}")
             with open(key_file, "w", encoding="utf-8") as kf:
                 kf.write(key_content)
             try:
                 os.chmod(key_file, 0o600)
             except Exception:
                 pass
+
             host_vars["ansible_ssh_private_key_file"] = key_file
-            host_vars["ansible_ssh_common_args"] += " -o IdentitiesOnly=yes"
+            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes"
             if creds.get("passphrase"):
                 host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
+
+        elif creds.get("auth_type") == "password" and creds.get("password"):
+            host_vars["ansible_password"] = creds["password"]
+            # No BatchMode=yes so sshpass can pass the password
+
+        elif creds.get("private_key"):
+            key_file = os.path.join(keys_dir, f"key_{host.id}")
+            with open(key_file, "w", encoding="utf-8") as kf:
+                kf.write(creds["private_key"].strip() + "\n")
+            try:
+                os.chmod(key_file, 0o600)
+            except Exception:
+                pass
+            host_vars["ansible_ssh_private_key_file"] = key_file
+            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes"
+
+        elif creds.get("password"):
+            host_vars["ansible_password"] = creds["password"]
+
         elif os.path.exists("/root/.ssh/id_rsa"):
             host_vars["ansible_ssh_private_key_file"] = "/root/.ssh/id_rsa"
+            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes"
         elif os.path.exists("/root/.ssh/id_ed25519"):
             host_vars["ansible_ssh_private_key_file"] = "/root/.ssh/id_ed25519"
-        elif creds["password"]:
-            host_vars["ansible_password"] = creds["password"]
-            host_vars["ansible_ssh_common_args"] = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5"
+            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes"
 
         # Handle privilege escalation
         if creds["become_method"] in ("sudo", "su") and host.os_type == "linux":
-            # If logged in as non-root (e.g. itsgsrv)
             if creds["user"] != "root":
                 host_vars["ansible_become"] = True
                 host_vars["ansible_become_method"] = creds["become_method"]
-                if creds["sudo_password"]:
+                if creds.get("sudo_password"):
                     host_vars["ansible_become_password"] = creds["sudo_password"]
 
         inventory_data["all"]["hosts"][host.name] = host_vars
@@ -262,7 +369,7 @@ def parse_ansible_recap(output: str) -> Dict[str, Dict[str, Any]]:
 
 
 def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int], extra_vars: Dict[str, Any]):
-    """Execute Ansible Playbook in background thread."""
+    """Execute Ansible Playbook in background thread with smart multi-credential fallback and auto-learning."""
     with app.app_context():
         from models import db, Host, TaskJob
 
@@ -281,104 +388,178 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
             db.session.commit()
             return
 
-        temp_dir = tempfile.mkdtemp(prefix="ansible_run_")
-        try:
-            inventory_file = generate_inventory(hosts, temp_dir, db.session)
-            
-            # Write extra vars file
-            extra_vars_file = os.path.join(temp_dir, "extra_vars.json")
-            with open(extra_vars_file, "w", encoding="utf-8") as evf:
-                json.dump(extra_vars, evf, ensure_ascii=False)
+        # Precompute candidate credential sequences for each host
+        host_candidates = {h.name: get_candidate_credentials(h, db.session) for h in hosts}
+        pending_hosts = {h.name: h for h in hosts}
+        host_attempt_indices = {h.name: 0 for h in hosts}
+        final_results = {}
+        aggregated_logs = []
 
-            playbook_path = os.path.join(os.path.dirname(__file__), "playbooks", playbook_name)
-            forks = int(os.getenv("ANSIBLE_FORKS", "50"))
-            timeout = int(os.getenv("ANSIBLE_TIMEOUT", "5"))
+        pass_num = 1
+        max_passes = 6
+        forks = int(os.getenv("ANSIBLE_FORKS", "50"))
+        timeout = int(os.getenv("ANSIBLE_TIMEOUT", "5"))
+        ansible_cmd = shutil.which("ansible-playbook")
+        playbook_path = os.path.join(os.path.dirname(__file__), "playbooks", playbook_name)
 
-            ansible_cmd = shutil.which("ansible-playbook")
-            
-            if ansible_cmd:
-                cmd = [
-                    ansible_cmd,
-                    "-i", inventory_file,
-                    playbook_path,
-                    "-e", f"@{extra_vars_file}",
-                    "-f", str(forks),
-                    "-T", str(timeout)
-                ]
-                
-                # Run Ansible
-                env = os.environ.copy()
-                env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
-                env["ANSIBLE_RETRY_FILES_ENABLED"] = "False"
-                env["ANSIBLE_STDOUT_CALLBACK"] = "default"
-                
-                proc = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    timeout=300,
-                    env=env
-                )
-                output = proc.stdout
-            else:
-                # Mock / Dry-run fallback if running on system without native ansible-playbook (e.g. initial dev test)
-                output = f"[ANSIBLE-WEB SIMULATION]\nansible-playbook CLI is not in PATH.\nTarget hosts: {len(hosts)}\nPlaybook: {playbook_name}\n"
-                output += "\nPLAY RECAP *********************************************************************\n"
-                for h in hosts:
-                    output += f"{h.name} : ok=1 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\n"
+        while pending_hosts and pass_num <= max_passes:
+            current_batch = []
+            current_creds_map = {}
 
-            # Parse results
-            recap_results = parse_ansible_recap(output)
-            
-            success_count = 0
-            failed_count = 0
-            details = {}
-
-            now = datetime.utcnow()
-            host_map = {h.name: h for h in hosts}
-
-            for h in hosts:
-                res = recap_results.get(h.name, {"status": "unreachable", "summary": "No recap returned"})
-                status = res["status"]
-                details[h.name] = res
-
-                if status == "ok":
-                    success_count += 1
-                    if task.task_type == "ping":
-                        h.last_status = "online"
-                        h.last_checked_at = now
-                        h.last_error = None
+            for h_name, h in list(pending_hosts.items()):
+                idx = host_attempt_indices[h_name]
+                cands = host_candidates[h_name]
+                if idx < len(cands):
+                    current_batch.append(h)
+                    current_creds_map[h_name] = cands[idx]
                 else:
-                    failed_count += 1
-                    if task.task_type == "ping":
-                        h.last_status = "offline"
-                        h.last_checked_at = now
-                        h.last_error = res.get("error") or res.get("summary")
+                    # No more candidates to try for this host
+                    del pending_hosts[h_name]
 
-            task.success_count = success_count
-            task.failed_count = failed_count
-            task.details_json = json.dumps(details, ensure_ascii=False)
-            task.log_output = output
-            task.finished_at = datetime.utcnow()
+            if not current_batch:
+                break
 
-            if failed_count == 0:
-                task.status = "success"
-            elif success_count == 0:
-                task.status = "failed"
+            if pass_num == 1:
+                pass_title = f"=== [ПРОХОД {pass_num}] Запуск Ansible для {len(current_batch)} хостов с основными профилями ==="
             else:
-                task.status = "partial"
+                pass_title = f"=== [ПРОХОД {pass_num} (АВТО-ПОДБОР)] Повторная попытка для {len(current_batch)} хостов с альтернативными профилями ==="
 
-            db.session.commit()
+            aggregated_logs.append(f"\n{pass_title}\n")
 
-        except Exception as e:
+            batch_temp_dir = tempfile.mkdtemp(prefix=f"ansible_pass_{pass_num}_")
+            try:
+                inventory_file = generate_inventory(current_batch, batch_temp_dir, db.session, current_creds_map)
+                extra_vars_file = os.path.join(batch_temp_dir, "extra_vars.json")
+                with open(extra_vars_file, "w", encoding="utf-8") as evf:
+                    json.dump(extra_vars, evf, ensure_ascii=False)
+
+                if ansible_cmd:
+                    cmd = [
+                        ansible_cmd,
+                        "-i", inventory_file,
+                        playbook_path,
+                        "-e", f"@{extra_vars_file}",
+                        "-f", str(forks),
+                        "-T", str(timeout)
+                    ]
+                    env = os.environ.copy()
+                    env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
+                    env["ANSIBLE_RETRY_FILES_ENABLED"] = "False"
+                    env["ANSIBLE_STDOUT_CALLBACK"] = "default"
+
+                    proc = subprocess.run(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        timeout=300,
+                        env=env
+                    )
+                    pass_output = proc.stdout
+                else:
+                    # Simulation mode fallback
+                    pass_output = f"[ANSIBLE-WEB SIMULATION - PASS {pass_num}]\nTarget hosts: {len(current_batch)}\n"
+                    pass_output += "PLAY RECAP *********************************************************************\n"
+                    for h in current_batch:
+                        pass_output += f"{h.name} : ok=1 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\n"
+
+                aggregated_logs.append(pass_output)
+                recap_results = parse_ansible_recap(pass_output)
+
+                # Process results of this pass
+                for h in current_batch:
+                    res = recap_results.get(h.name, {"status": "unreachable", "summary": "No recap returned"})
+                    used_cred = current_creds_map[h.name]
+
+                    if res["status"] == "ok":
+                        # SUCCESS!
+                        res["matched_profile"] = used_cred["profile_name"]
+                        res["matched_user"] = used_cred["user"]
+                        res["matched_auth"] = used_cred["auth_type"]
+                        final_results[h.name] = res
+
+                        # Auto-learn: If this profile succeeded, save it directly to host so future tasks need no retry
+                        if used_cred["profile_id"] and h.credential_id != used_cred["profile_id"]:
+                            h.credential_id = used_cred["profile_id"]
+                            try:
+                                db.session.commit()
+                                aggregated_logs.append(
+                                    f"[АВТО-ПРИВЯЗКА] Хост '{h.name}' успешно авторизован под '{used_cred['profile_name']}' ({used_cred['user']}). Профиль сохранён в базу для этого хоста.\n"
+                                )
+                            except Exception:
+                                db.session.rollback()
+
+                        if h.name in pending_hosts:
+                            del pending_hosts[h.name]
+                    else:
+                        # Host failed this pass
+                        err_text = (res.get("error") or res.get("summary") or "").lower()
+                        is_auth_error = any(kw in err_text for kw in [
+                            "permission denied", "authentication failed", "error in libcrypto",
+                            "auth fail", "password", "publickey"
+                        ])
+
+                        cands = host_candidates[h.name]
+                        next_idx = host_attempt_indices[h.name] + 1
+
+                        if is_auth_error and next_idx < len(cands):
+                            # Move to next candidate in next pass!
+                            host_attempt_indices[h.name] = next_idx
+                            next_cand = cands[next_idx]
+                            aggregated_logs.append(
+                                f"[ПОДБОР] Хост '{h.name}': отказ авторизации под '{used_cred['profile_name']}' ({used_cred['user']}, {used_cred['auth_type']}). Следующая попытка: '{next_cand['profile_name']}' ({next_cand['user']}, {next_cand['auth_type']})...\n"
+                            )
+                        else:
+                            # Unreachable / network timeout OR all candidate profiles exhausted
+                            final_results[h.name] = res
+                            if h.name in pending_hosts:
+                                del pending_hosts[h.name]
+
+            except Exception as e:
+                aggregated_logs.append(f"[ОШИБКА ВЫПОЛНЕНИЯ ПРОХОДА {pass_num}]: {str(e)}\n")
+                break
+            finally:
+                shutil.rmtree(batch_temp_dir, ignore_errors=True)
+
+            pass_num += 1
+
+        # Finalize task metrics and update host states
+        now = datetime.utcnow()
+        success_count = 0
+        failed_count = 0
+
+        for h in hosts:
+            res = final_results.get(h.name, {"status": "unreachable", "summary": "No recap returned"})
+            if res["status"] == "ok":
+                success_count += 1
+                if task.task_type == "ping":
+                    h.last_status = "online"
+                    h.last_checked_at = now
+                    h.last_error = None
+            else:
+                failed_count += 1
+                if task.task_type == "ping":
+                    h.last_status = "offline"
+                    h.last_checked_at = now
+                    h.last_error = res.get("error") or res.get("summary")
+
+        task.success_count = success_count
+        task.failed_count = failed_count
+        task.details_json = json.dumps(final_results, ensure_ascii=False)
+        task.log_output = "".join(aggregated_logs)
+        task.finished_at = now
+
+        if failed_count == 0:
+            task.status = "success"
+        elif success_count == 0:
             task.status = "failed"
-            task.log_output = f"Execution Error: {str(e)}"
-            task.finished_at = datetime.utcnow()
+        else:
+            task.status = "partial"
+
+        try:
             db.session.commit()
-        finally:
-            # Clean up temporary inventory and private key files
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception as e:
+            logger.error(f"Failed to commit final task state: {e}")
 
 
 def dispatch_task(app, task_type: str, playbook_name: str, host_ids: List[int], extra_vars: Dict[str, Any], user_id: Optional[int], summary: str, filter_info: str = "") -> int:
