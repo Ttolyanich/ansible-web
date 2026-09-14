@@ -26,13 +26,13 @@ class ZabbixClient:
             "params": params or {},
             "id": self.req_id
         }
-        if self.token:
-            payload["auth"] = self.token
-
         headers = {
             "Content-Type": "application/json-rpc"
         }
-        if self.token:
+
+        # Zabbix 6.4/7.0 strictly requires apiinfo.version to be unauthenticated
+        if method != "apiinfo.version" and self.token:
+            payload["auth"] = self.token
             headers["Authorization"] = f"Bearer {self.token}"
 
         self.req_id += 1
