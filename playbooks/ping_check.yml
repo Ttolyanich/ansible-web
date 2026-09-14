@@ -2,6 +2,7 @@
 - name: Fast SSH Connectivity & Availability Check
   hosts: all
   gather_facts: false
+  become: false
 
   tasks:
     - name: Test raw SSH execution

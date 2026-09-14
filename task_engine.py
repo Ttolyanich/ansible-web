@@ -411,8 +411,9 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
 
         pass_num = 1
         max_passes = 6
-        forks = int(os.getenv("ANSIBLE_FORKS", "50"))
-        timeout = int(os.getenv("ANSIBLE_TIMEOUT", "5"))
+        forks = int(os.getenv("ANSIBLE_FORKS", "100"))
+        ssh_timeout = int(os.getenv("ANSIBLE_TIMEOUT", "5"))
+        playbook_timeout = int(os.getenv("ANSIBLE_TASK_TIMEOUT", "900"))
         ansible_cmd = shutil.which("ansible-playbook")
         playbook_path = os.path.join(os.path.dirname(__file__), "playbooks", playbook_name)
 
@@ -454,7 +455,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                         playbook_path,
                         "-e", f"@{extra_vars_file}",
                         "-f", str(forks),
-                        "-T", str(timeout)
+                        "-T", str(ssh_timeout)
                     ]
                     env = os.environ.copy()
                     env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
@@ -466,7 +467,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True,
-                        timeout=300,
+                        timeout=max(playbook_timeout, len(current_batch) * 3),
                         env=env
                     )
                     pass_output = proc.stdout
