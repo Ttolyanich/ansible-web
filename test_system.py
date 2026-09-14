@@ -34,15 +34,26 @@ def test_database_and_bootstrap():
         assert admin.check_password("admin"), "Default password should be 'admin'"
         print("  [OK] Admin user verified.")
 
-        # Verify credential profiles
-        profiles = CredentialProfile.query.all()
-        assert len(profiles) >= 2, "Default profiles (Linux & Windows) should exist!"
-        print(f"  [OK] Credential profiles found: {[p.name for p in profiles]}")
-
         # Verify Zabbix setting
         setting = ZabbixSetting.query.first()
         assert setting is not None, "Zabbix setting should exist!"
         print("  [OK] Zabbix settings record exists.")
+
+        # Test creating and editing a custom credential profile dynamically
+        cp = CredentialProfile(name="Custom Test Profile", os_type="linux", ssh_user="myuser", ssh_port=2222)
+        db.session.add(cp)
+        db.session.commit()
+        assert cp.id is not None
+        # Test edit
+        cp.name = "Custom Test Profile Edited"
+        cp.ssh_port = 22
+        db.session.commit()
+        loaded = db.session.get(CredentialProfile, cp.id)
+        assert loaded.name == "Custom Test Profile Edited"
+        assert loaded.ssh_port == 22
+        db.session.delete(loaded)
+        db.session.commit()
+        print("  [OK] Dynamic credential profile creation and editing verified.")
 
 def test_inventory_generation():
     print("\n--- 4. Testing Dynamic Inventory Generation ---")
@@ -97,7 +108,7 @@ def test_inventory_generation():
         assert hosts["test-deb-srv01"]["ansible_host"] == "192.168.10.15"
         assert hosts["test-deb-srv01"]["os_type"] == "linux"
         assert "test-win-srv01" in hosts
-        assert hosts["test-win-srv01"]["ansible_user"] == "ITSGSRV"
+        assert hosts["test-win-srv01"]["ansible_user"] == "Administrator"
         assert hosts["test-win-srv01"]["os_type"] == "windows"
         
         print(f"  [OK] Dynamic inventory generated and validated:\n{yaml.dump(inv_data, default_flow_style=False)}")

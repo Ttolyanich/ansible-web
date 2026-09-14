@@ -427,6 +427,56 @@ def create_credential():
     flash(f"Профиль «{name}» успешно создан.", "success")
     return redirect(url_for("credentials_view"))
 
+@app.route("/credentials/<int:profile_id>/edit", methods=["POST"])
+@login_required
+@admin_required
+def edit_credential(profile_id):
+    profile = db.get_or_404(CredentialProfile, profile_id)
+
+    name = request.form.get("name", "").strip()
+    os_type = request.form.get("os_type", profile.os_type)
+    ssh_user = request.form.get("ssh_user", "").strip()
+    ssh_port = int(request.form.get("ssh_port", 22))
+    become_method = request.form.get("become_method", "sudo")
+    private_key = request.form.get("private_key", "").strip()
+    passphrase = request.form.get("passphrase", "").strip()
+    password = request.form.get("password", "").strip()
+    sudo_password = request.form.get("sudo_password", "").strip()
+    is_default = request.form.get("is_default") == "1"
+
+    if name:
+        profile.name = name
+    profile.os_type = os_type
+    if ssh_user:
+        profile.ssh_user = ssh_user
+    profile.ssh_port = ssh_port
+    profile.become_method = become_method
+
+    if private_key:
+        profile.private_key = private_key
+        profile.auth_type = "key"
+
+    if passphrase:
+        profile.passphrase = passphrase
+
+    if password:
+        profile.password = password
+        profile.auth_type = "password"
+
+    if sudo_password:
+        profile.sudo_password = sudo_password
+
+    if is_default:
+        CredentialProfile.query.filter(
+            CredentialProfile.id != profile.id,
+            CredentialProfile.os_type == profile.os_type
+        ).update({"is_default": False})
+    profile.is_default = is_default
+
+    db.session.commit()
+    flash(f"Профиль «{profile.name}» успешно обновлен.", "success")
+    return redirect(url_for("credentials_view"))
+
 @app.route("/credentials/<int:profile_id>/delete", methods=["POST"])
 @login_required
 @admin_required
@@ -587,6 +637,7 @@ def bootstrap_database():
             print("[BOOTSTRAP] Created default admin user (admin / admin)")
 
         # 2. Create Default Zabbix Setting if not exists
+        # 2. Create Default Zabbix Setting if not exists
         if ZabbixSetting.query.count() == 0:
             setting = ZabbixSetting(
                 url="http://zabbix-server/api_jsonrpc.php",
@@ -594,29 +645,6 @@ def bootstrap_database():
                 auto_sync=False
             )
             db.session.add(setting)
-
-        # 3. Create Default Credential Profiles if empty
-        if CredentialProfile.query.count() == 0:
-            p_linux = CredentialProfile(
-                name="Default Linux (root / itsgsrv)",
-                os_type="linux",
-                ssh_user="root",
-                ssh_port=22,
-                auth_type="key",
-                become_method="sudo",
-                is_default=True
-            )
-            p_win = CredentialProfile(
-                name="Default Windows (ITSGSRV OpenSSH)",
-                os_type="windows",
-                ssh_user="ITSGSRV",
-                ssh_port=22,
-                auth_type="key",
-                become_method="none",
-                is_default=True
-            )
-            db.session.add_all([p_linux, p_win])
-            print("[BOOTSTRAP] Created default Linux and Windows credential profiles")
 
         db.session.commit()
 

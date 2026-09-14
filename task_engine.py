@@ -33,7 +33,7 @@ def resolve_credentials(host, db_session) -> Dict[str, Any]:
         profile = CredentialProfile.query.filter_by(os_type=host.os_type, is_default=True).first()
 
     creds = {
-        "user": "root" if host.os_type == "linux" else "ITSGSRV",
+        "user": "root" if host.os_type == "linux" else "Administrator",
         "port": 22,
         "auth_type": "key",
         "private_key": "",
