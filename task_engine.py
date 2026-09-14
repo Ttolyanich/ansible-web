@@ -197,22 +197,36 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
             if creds.get("passphrase"):
                 try:
                     from cryptography.hazmat.primitives import serialization
-                    loaded_key = serialization.load_ssh_private_key(
-                        key_content.encode("utf-8"),
-                        password=creds["passphrase"].encode("utf-8")
-                    )
+                    pass_bytes = creds["passphrase"].encode("utf-8")
+                    key_bytes = key_content.encode("utf-8")
+                    loaded_key = None
+
                     try:
-                        key_content = loaded_key.private_bytes(
-                            encoding=serialization.Encoding.PEM,
-                            format=serialization.PrivateFormat.OpenSSH,
-                            encryption_algorithm=serialization.NoEncryption()
-                        ).decode("utf-8")
+                        loaded_key = serialization.load_ssh_private_key(key_bytes, password=pass_bytes)
                     except Exception:
-                        key_content = loaded_key.private_bytes(
-                            encoding=serialization.Encoding.PEM,
-                            format=serialization.PrivateFormat.PKCS8,
-                            encryption_algorithm=serialization.NoEncryption()
-                        ).decode("utf-8")
+                        pass
+
+                    if not loaded_key:
+                        try:
+                            loaded_key = serialization.load_pem_private_key(key_bytes, password=pass_bytes)
+                        except Exception:
+                            pass
+
+                    if loaded_key:
+                        for fmt in [
+                            serialization.PrivateFormat.TraditionalOpenSSL,
+                            serialization.PrivateFormat.OpenSSH,
+                            serialization.PrivateFormat.PKCS8
+                        ]:
+                            try:
+                                key_content = loaded_key.private_bytes(
+                                    encoding=serialization.Encoding.PEM,
+                                    format=fmt,
+                                    encryption_algorithm=serialization.NoEncryption()
+                                ).decode("utf-8")
+                                break
+                            except Exception:
+                                continue
                 except Exception as ex:
                     logger.warning(f"Failed to decrypt private key for {host.name}: {ex}")
                     if creds.get("passphrase"):
@@ -227,7 +241,7 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
                 pass
 
             host_vars["ansible_ssh_private_key_file"] = key_file
-            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes"
+            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes -o PubkeyAcceptedKeyTypes=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -o HostKeyAlgorithms=+ssh-rsa"
             if creds.get("passphrase"):
                 host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
 
