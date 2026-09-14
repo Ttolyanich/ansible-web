@@ -24,23 +24,35 @@ def resolve_credentials(host, db_session) -> Dict[str, Any]:
     """
     from models import CredentialProfile
 
+    target_os = host.os_type if host.os_type in ("linux", "windows") else "linux"
+
     profile = None
     if host.override_credential:
         profile = host.override_credential
     elif host.group and host.group.credential:
         profile = host.group.credential
     else:
-        profile = CredentialProfile.query.filter_by(os_type=host.os_type, is_default=True).first()
+        # 1. Try default profile for this OS
+        profile = CredentialProfile.query.filter_by(os_type=target_os, is_default=True).first()
+        # 2. Fallback to any profile matching this OS
+        if not profile:
+            profile = CredentialProfile.query.filter_by(os_type=target_os).first()
+        # 3. Fallback to any default profile
+        if not profile:
+            profile = CredentialProfile.query.filter_by(is_default=True).first()
+        # 4. Fallback to any profile in DB
+        if not profile:
+            profile = CredentialProfile.query.first()
 
     creds = {
-        "user": "root" if host.os_type == "linux" else "Administrator",
+        "user": "root" if target_os == "linux" else "Administrator",
         "port": 22,
         "auth_type": "key",
         "private_key": "",
         "passphrase": "",
         "password": "",
         "sudo_password": "",
-        "become_method": "sudo" if host.os_type == "linux" else "none"
+        "become_method": "sudo" if target_os == "linux" else "none"
     }
 
     if profile:
@@ -64,16 +76,27 @@ def generate_inventory(hosts: list, temp_dir: str, db_session) -> str:
         }
     }
 
+    try:
+        os.chmod(temp_dir, 0o700)
+    except Exception:
+        pass
+
     keys_dir = os.path.join(temp_dir, "keys")
     os.makedirs(keys_dir, exist_ok=True)
+    try:
+        os.chmod(keys_dir, 0o700)
+    except Exception:
+        pass
 
     for host in hosts:
         creds = resolve_credentials(host, db_session)
+        target_os = host.os_type if host.os_type in ("linux", "windows") else "linux"
+
         host_vars = {
             "ansible_host": host.ip_address,
             "ansible_port": creds["port"],
             "ansible_user": creds["user"],
-            "os_type": host.os_type or "linux",
+            "os_type": target_os,
             "ansible_ssh_common_args": "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o BatchMode=yes"
         }
 
@@ -106,8 +129,13 @@ def generate_inventory(hosts: list, temp_dir: str, db_session) -> str:
             except Exception:
                 pass
             host_vars["ansible_ssh_private_key_file"] = key_file
+            host_vars["ansible_ssh_common_args"] += " -o IdentitiesOnly=yes"
             if creds.get("passphrase"):
                 host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
+        elif os.path.exists("/root/.ssh/id_rsa"):
+            host_vars["ansible_ssh_private_key_file"] = "/root/.ssh/id_rsa"
+        elif os.path.exists("/root/.ssh/id_ed25519"):
+            host_vars["ansible_ssh_private_key_file"] = "/root/.ssh/id_ed25519"
         elif creds["password"]:
             host_vars["ansible_password"] = creds["password"]
             host_vars["ansible_ssh_common_args"] = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5"
