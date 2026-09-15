@@ -305,6 +305,8 @@ def extract_host_errors(output: str) -> Dict[str, str]:
 
                 if "Permission denied" in rest:
                     err_text = "Permission denied (проверьте SSH-ключ / пароль)"
+                elif "task timeout" in rest.lower():
+                    err_text = "Task timeout (хост завис при выполнении команды)"
                 elif "timed out" in rest.lower() or "timeout" in rest.lower():
                     err_text = "Connection timed out (хост не отвечает по SSH)"
                 elif "Connection refused" in rest:
@@ -461,9 +463,15 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                         "-T", str(ssh_timeout)
                     ]
                     env = os.environ.copy()
+                    cfg_path = os.path.join(os.path.dirname(__file__), "ansible.cfg")
+                    if os.path.exists(cfg_path):
+                        env["ANSIBLE_CONFIG"] = cfg_path
                     env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
                     env["ANSIBLE_RETRY_FILES_ENABLED"] = "False"
                     env["ANSIBLE_STDOUT_CALLBACK"] = "default"
+                    env["ANSIBLE_SSH_RETRIES"] = "0"
+                    env["ANSIBLE_TIMEOUT"] = str(ssh_timeout)
+                    env["ANSIBLE_TASK_TIMEOUT"] = "15"
 
                     proc = subprocess.run(
                         cmd,
