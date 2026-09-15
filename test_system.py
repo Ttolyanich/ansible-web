@@ -339,6 +339,15 @@ def test_ssh_key_normalization_and_ping_escalation():
         db.session.commit()
     print("  [OK] is_ping bypass for privilege escalation verified.")
 
+    # 4. Test validate_ssh_key
+    from task_engine import validate_ssh_key
+    valid_pub, err_pub = validate_ssh_key("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@test")
+    assert not valid_pub and "открытый" in err_pub, "Should reject public key!"
+
+    valid_ppk, err_ppk = validate_ssh_key("PuTTY-User-Key-File-2: ssh-rsa\nEncryption: none")
+    assert not valid_ppk and "PuTTY" in err_ppk, "Should reject PPK format!"
+    print("  [OK] validate_ssh_key rejects public keys and PPK formats.")
+
 if __name__ == "__main__":
     try:
         test_syntax()

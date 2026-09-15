@@ -17,3 +17,9 @@ services:
     volumes:
       - ./instance:/app/instance
       - ./playbooks:/app/playbooks
+      - ./app.py:/app/app.py
+      - ./models.py:/app/models.py
+      - ./task_engine.py:/app/task_engine.py
+      - ./zabbix_client.py:/app/zabbix_client.py
+      - ./templates:/app/templates
+      - ./static:/app/static

@@ -8,7 +8,7 @@ import subprocess
 import logging
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +172,75 @@ def normalize_private_key(raw_key: Optional[str]) -> str:
     if not clean_lines:
         return ""
     return "\n".join(clean_lines) + "\n"
+
+
+def validate_ssh_key(raw_key: str, passphrase: str = "") -> Tuple[bool, str]:
+    """
+    Validates private key format and checks if passphrase is required.
+    Returns (True, "") if valid, or (False, user_friendly_error_message).
+    """
+    if not raw_key or not raw_key.strip():
+        return True, ""
+
+    clean = raw_key.strip()
+
+    # 1. Check for public key mistakenly pasted
+    if clean.startswith(("ssh-rsa", "ssh-ed25519", "ecdsa-sha2", "ssh-dss")):
+        return False, "Вы вставили открытый (публичный) ключ вместо закрытого (приватного)! Приватный ключ начинается со строки '-----BEGIN ... PRIVATE KEY-----'."
+
+    # 2. Check for PuTTY PPK format
+    if clean.startswith("PuTTY-User-Key-File"):
+        return False, "Вы вставили ключ в формате PuTTY (.ppk). OpenSSH не поддерживает формат PPK напрямую. Откройте ключ в программе PuTTYgen и экспортируйте его через меню: Conversions -> Export OpenSSH key."
+
+    # 3. Check for standard BEGIN header
+    if not clean.startswith("-----BEGIN"):
+        return False, "Неверный формат ключа: приватный SSH-ключ должен начинаться со строки '-----BEGIN ... PRIVATE KEY-----'."
+
+    # 4. Check loading & passphrase with cryptography
+    try:
+        from cryptography.hazmat.primitives import serialization
+        key_bytes = normalize_private_key(clean).encode("utf-8")
+        pass_bytes = passphrase.strip().encode("utf-8") if (passphrase and passphrase.strip()) else None
+
+        loaded = None
+        try:
+            loaded = serialization.load_ssh_private_key(key_bytes, password=pass_bytes)
+        except Exception:
+            pass
+
+        if not loaded:
+            try:
+                loaded = serialization.load_pem_private_key(key_bytes, password=pass_bytes)
+            except Exception:
+                pass
+
+        if not loaded:
+            # Check if failure was caused by missing or incorrect passphrase
+            try:
+                serialization.load_ssh_private_key(key_bytes, password=None)
+            except TypeError as te:
+                if "encrypted" in str(te).lower():
+                    return False, "Приватный ключ защищён парольной фразой! Пожалуйста, укажите 'Парольную фразу ключа' в поле профиля."
+            except Exception:
+                pass
+
+            try:
+                serialization.load_pem_private_key(key_bytes, password=None)
+            except TypeError as te:
+                if "encrypted" in str(te).lower():
+                    return False, "Приватный ключ защищён парольной фразой! Пожалуйста, укажите 'Парольную фразу ключа' в поле профиля."
+            except Exception:
+                pass
+
+            if pass_bytes:
+                return False, "Не удалось расшифровать приватный ключ. Проверьте правильность введённой парольной фразы."
+
+            return False, "Не удалось распознать формат приватного ключа. Убедитесь, что скопирован весь блок от BEGIN до END."
+
+    except Exception as ex:
+        return False, f"Ошибка валидации ключа: {ex}"
+
+    return True, ""
 
 
 def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> None:

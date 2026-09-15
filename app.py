@@ -446,7 +446,7 @@ def credentials_view():
 @login_required
 @admin_required
 def create_credential():
-    from task_engine import normalize_private_key
+    from task_engine import normalize_private_key, validate_ssh_key
 
     name = request.form.get("name", "").strip()
     os_type = request.form.get("os_type", "linux")
@@ -459,6 +459,12 @@ def create_credential():
     password = request.form.get("password", "").strip()
     sudo_password = request.form.get("sudo_password", "").strip()
     is_default = request.form.get("is_default") == "1"
+
+    if private_key:
+        is_valid, err_msg = validate_ssh_key(private_key, passphrase)
+        if not is_valid:
+            flash(f"Ошибка в SSH-ключе: {err_msg}", "danger")
+            return redirect(url_for("credentials_view"))
 
     if is_default:
         # Reset existing defaults for this OS
@@ -493,7 +499,7 @@ def create_credential():
 @login_required
 @admin_required
 def edit_credential(profile_id):
-    from task_engine import normalize_private_key
+    from task_engine import normalize_private_key, validate_ssh_key
 
     profile = db.get_or_404(CredentialProfile, profile_id)
 
@@ -508,6 +514,13 @@ def edit_credential(profile_id):
     password = request.form.get("password", "").strip()
     sudo_password = request.form.get("sudo_password", "").strip()
     is_default = request.form.get("is_default") == "1"
+
+    if private_key:
+        eff_passphrase = passphrase if passphrase else (profile.passphrase or "")
+        is_valid, err_msg = validate_ssh_key(private_key, eff_passphrase)
+        if not is_valid:
+            flash(f"Ошибка в SSH-ключе: {err_msg}", "danger")
+            return redirect(url_for("credentials_view"))
 
     if name:
         profile.name = name
