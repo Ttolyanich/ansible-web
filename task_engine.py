@@ -279,18 +279,14 @@ _key_validation_cache: Dict[Tuple[str, str], Tuple[bool, str]] = {}
 
 def validate_ssh_key(raw_key: str, passphrase: str = "") -> Tuple[bool, str]:
     """
-    Validates private key format and checks if passphrase is required.
-    Cached for lightning-fast batch processing across hundreds of hosts.
-    Returns (True, "") if valid, or (False, user_friendly_error_message).
+    Validates private key format and checks if passphrase is required / correct.
+    Supports OpenSSH, PEM, PKCS#8, and legacy ciphers (DES-EDE3-CBC).
     """
     if not raw_key or not raw_key.strip():
         return True, ""
 
-    cache_key = (raw_key.strip(), (passphrase or "").strip())
-    if cache_key in _key_validation_cache:
-        return _key_validation_cache[cache_key]
-
     clean = raw_key.strip()
+    eff_pass = (passphrase or "")
 
     # 1. Check for public key mistakenly pasted
     if clean.startswith(("ssh-rsa", "ssh-ed25519", "ecdsa-sha2", "ssh-dss")):
@@ -304,67 +300,107 @@ def validate_ssh_key(raw_key: str, passphrase: str = "") -> Tuple[bool, str]:
     if not clean.startswith("-----BEGIN"):
         return False, "Неверный формат ключа: приватный SSH-ключ должен начинаться со строки '-----BEGIN ... PRIVATE KEY-----'."
 
+    cache_key = (clean, eff_pass.strip())
+    if cache_key in _key_validation_cache:
+        return _key_validation_cache[cache_key]
+
     enable_openssl_legacy_provider()
 
     # 4. Check loading & passphrase with cryptography
-    try:
-        from cryptography.hazmat.primitives import serialization
-        key_bytes = normalize_private_key(clean).encode("utf-8")
-        pass_bytes = passphrase.strip().encode("utf-8") if (passphrase and passphrase.strip()) else None
+    key_bytes = normalize_private_key(clean).encode("utf-8")
+    loaded = False
 
-        loaded = None
+    for test_pass in ([eff_pass.strip().encode("utf-8"), eff_pass.encode("utf-8")] if eff_pass else [None]):
         try:
-            loaded = serialization.load_ssh_private_key(key_bytes, password=pass_bytes)
-        except Exception:
-            pass
-
-        if not loaded:
+            from cryptography.hazmat.primitives import serialization
             try:
-                loaded = serialization.load_pem_private_key(key_bytes, password=pass_bytes)
+                k = serialization.load_ssh_private_key(key_bytes, password=test_pass)
+                if k:
+                    loaded = True
+                    break
             except Exception:
                 pass
 
-        # Fallback decryption via openssl CLI if cryptography struggles with legacy ciphers (e.g. DES-EDE3-CBC)
-        if not loaded and pass_bytes:
-            openssl_bin = shutil.which("openssl")
-            if openssl_bin:
+            if not loaded:
                 try:
-                    env_sub = os.environ.copy()
-                    cfg_path = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
-                    if os.path.exists(cfg_path):
-                        env_sub["OPENSSL_CONF"] = cfg_path
+                    k = serialization.load_pem_private_key(key_bytes, password=test_pass)
+                    if k:
+                        loaded = True
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Fallback 1: Native ssh-keygen verification (handles OpenSSH bcrypt KDF, AES-CTR, etc.)
+    if not loaded:
+        ssh_keygen = shutil.which("ssh-keygen")
+        if ssh_keygen:
+            tf_path = None
+            try:
+                with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tf:
+                    tf.write(normalize_private_key(clean))
+                    tf_path = tf.name
+                try:
+                    os.chmod(tf_path, 0o600)
+                except Exception:
+                    pass
+                for tp in ([eff_pass.strip(), eff_pass] if eff_pass else [""]):
                     res = subprocess.run(
-                        [openssl_bin, "rsa", "-passin", f"pass:{passphrase.strip()}"],
-                        input=key_bytes,
+                        [ssh_keygen, "-y", "-P", tp, "-f", tf_path],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
-                        env=env_sub,
                         timeout=5
                     )
-                    if res.returncode == 0 and b"BEGIN RSA PRIVATE KEY" in res.stdout:
+                    if res.returncode == 0 and res.stdout:
                         loaded = True
-                except Exception as ex:
-                    logger.debug(f"openssl validate fallback: {ex}")
+                        break
+            except Exception as ex:
+                logger.debug(f"ssh-keygen validate fallback error: {ex}")
+            finally:
+                if tf_path and os.path.exists(tf_path):
+                    try:
+                        os.remove(tf_path)
+                    except Exception:
+                        pass
 
-        if not loaded:
-            # Check if key is encrypted and requires a passphrase
-                is_encrypted = ("ENCRYPTED" in clean or "Proc-Type: 4,ENCRYPTED" in clean)
-                if is_encrypted and not pass_bytes:
-                    res = (False, "Приватный ключ защищён парольной фразой! Пожалуйста, укажите 'Парольную фразу ключа' в поле профиля.")
-                    _key_validation_cache[cache_key] = res
-                    return res
+    # Fallback 2: OpenSSL CLI with legacy provider (DES-EDE3-CBC, PKCS8)
+    if not loaded and eff_pass:
+        openssl_bin = shutil.which("openssl")
+        if openssl_bin:
+            env_sub = os.environ.copy()
+            cfg_path = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
+            if os.path.exists(cfg_path):
+                env_sub["OPENSSL_CONF"] = cfg_path
+            for subcmd in ["pkey", "rsa"]:
+                for tp in [eff_pass.strip(), eff_pass]:
+                    try:
+                        res = subprocess.run(
+                            [openssl_bin, subcmd, "-passin", f"pass:{tp}"],
+                            input=key_bytes,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            env=env_sub,
+                            timeout=5
+                        )
+                        if res.returncode == 0 and b"PRIVATE KEY" in res.stdout:
+                            loaded = True
+                            break
+                    except Exception as ex:
+                        logger.debug(f"openssl {subcmd} validate fallback: {ex}")
+                if loaded:
+                    break
 
-                if pass_bytes:
-                    res = (False, "Не удалось расшифровать приватный ключ. Проверьте правильность введённой парольной фразы.")
-                    _key_validation_cache[cache_key] = res
-                    return res
+    if not loaded:
+        is_encrypted = ("ENCRYPTED" in clean or "Proc-Type: 4,ENCRYPTED" in clean)
+        if is_encrypted and not eff_pass:
+            return (False, "Приватный ключ защищён парольной фразой! Пожалуйста, укажите 'Парольную фразу ключа' в поле профиля.")
 
-                res = (False, "Не удалось распознать формат приватного ключа. Убедитесь, что скопирован весь блок от BEGIN до END.")
-                _key_validation_cache[cache_key] = res
-                return res
+        if eff_pass:
+            return (False, "Не удалось расшифровать приватный ключ. Проверьте правильность введённой парольной фразы.")
 
-    except Exception as ex:
-        res = (False, f"Ошибка валидации ключа: {ex}")
+        # If not explicitly marked as ENCRYPTED and no pass, accept it as raw key
+        res = (True, "")
         _key_validation_cache[cache_key] = res
         return res
 
@@ -377,8 +413,8 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> bo
     """
     Writes private key ensuring:
     1. Perfect Unix LF line endings (no \r or CRLF that causes 'error in libcrypto')
-    2. Decrypts passphrase via cryptography if present (or normalizes key)
-    3. Writes with strict binary encoding and 0600 permissions
+    2. Attempts to decrypt in-place so Ansible can use passwordless key directly
+    3. Writes with strict 0600 permissions
     """
     clean_key = normalize_private_key(key_text)
     if not clean_key:
@@ -387,28 +423,29 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> bo
     final_content = clean_key
     enable_openssl_legacy_provider()
 
-    # Attempt to load and re-serialize through cryptography to guarantee OpenSSL/libcrypto compatibility
+    # Attempt to load and re-serialize through cryptography if possible
     loaded_key = None
     try:
         from cryptography.hazmat.primitives import serialization
         key_bytes = clean_key.encode("utf-8")
-        pass_bytes = passphrase.strip().encode("utf-8") if (passphrase and passphrase.strip()) else None
+        pass_bytes = passphrase.encode("utf-8") if passphrase else None
 
-        # Try OpenSSH format
-        try:
-            loaded_key = serialization.load_ssh_private_key(key_bytes, password=pass_bytes)
-        except Exception:
-            pass
-
-        # Try PEM format (RSA, EC, PKCS8)
-        if not loaded_key:
+        for test_pass in ([pass_bytes, passphrase.strip().encode("utf-8")] if pass_bytes else [None]):
             try:
-                loaded_key = serialization.load_pem_private_key(key_bytes, password=pass_bytes)
+                loaded_key = serialization.load_ssh_private_key(key_bytes, password=test_pass)
+                if loaded_key:
+                    break
             except Exception:
                 pass
+            if not loaded_key:
+                try:
+                    loaded_key = serialization.load_pem_private_key(key_bytes, password=test_pass)
+                    if loaded_key:
+                        break
+                except Exception:
+                    pass
 
         if loaded_key and hasattr(loaded_key, "private_bytes"):
-            # Successfully parsed! Re-export in clean unencrypted OpenSSH or Traditional PEM format
             for enc_fmt in [
                 serialization.PrivateFormat.OpenSSH,
                 serialization.PrivateFormat.TraditionalOpenSSL,
@@ -427,35 +464,33 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> bo
     except Exception as ex:
         logger.debug(f"Cryptography key export note: {ex}")
 
-    # Fallback decryption via openssl CLI if cryptography could not deserialize legacy cipher (e.g. DES-EDE3-CBC)
-    if not loaded_key and (passphrase and passphrase.strip()):
+    # Fallback decryption via openssl CLI if cryptography could not deserialize
+    if not loaded_key and passphrase:
         openssl_bin = shutil.which("openssl")
         if openssl_bin:
-            try:
-                env_sub = os.environ.copy()
-                cfg_path = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
-                if os.path.exists(cfg_path):
-                    env_sub["OPENSSL_CONF"] = cfg_path
-                res = subprocess.run(
-                    [openssl_bin, "rsa", "-passin", f"pass:{passphrase.strip()}"],
-                    input=clean_key.encode("utf-8"),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=env_sub,
-                    timeout=5
-                )
-                if res.returncode == 0 and b"BEGIN RSA PRIVATE KEY" in res.stdout:
-                    final_content = normalize_private_key(res.stdout.decode("utf-8"))
-                    loaded_key = True
-            except Exception as ex:
-                logger.debug(f"openssl write fallback: {ex}")
-
-    # If key could not be decrypted/loaded, validate before writing
-    if not loaded_key:
-        is_val, _ = validate_ssh_key(clean_key, passphrase)
-        if not is_val:
-            logger.warning(f"Skipping writing invalid key to {target_file}")
-            return False
+            env_sub = os.environ.copy()
+            cfg_path = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
+            if os.path.exists(cfg_path):
+                env_sub["OPENSSL_CONF"] = cfg_path
+            for subcmd in ["pkey", "rsa"]:
+                for tp in [passphrase, passphrase.strip()]:
+                    try:
+                        res = subprocess.run(
+                            [openssl_bin, subcmd, "-passin", f"pass:{tp}"],
+                            input=clean_key.encode("utf-8"),
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            env=env_sub,
+                            timeout=5
+                        )
+                        if res.returncode == 0 and b"PRIVATE KEY" in res.stdout:
+                            final_content = normalize_private_key(res.stdout.decode("utf-8"))
+                            loaded_key = True
+                            break
+                    except Exception as ex:
+                        logger.debug(f"openssl {subcmd} write fallback: {ex}")
+                if loaded_key:
+                    break
 
     # Write as pure Unix bytes (\n only) in binary mode
     with open(target_file, "wb") as f:
@@ -465,6 +500,24 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> bo
         os.chmod(target_file, 0o600)
     except Exception:
         pass
+
+    # If key still has a passphrase, decrypt it in-place using ssh-keygen so Ansible runs passwordless
+    if passphrase and not loaded_key:
+        ssh_keygen = shutil.which("ssh-keygen")
+        if ssh_keygen:
+            for tp in [passphrase, passphrase.strip()]:
+                try:
+                    res = subprocess.run(
+                        [ssh_keygen, "-p", "-P", tp, "-N", "", "-f", target_file],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5
+                    )
+                    if res.returncode == 0:
+                        logger.info(f"Decrypted private key in-place for Ansible at {target_file}")
+                        break
+                except Exception as ex:
+                    logger.debug(f"ssh-keygen in-place decrypt note: {ex}")
 
     return True
 

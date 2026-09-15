@@ -1212,14 +1212,15 @@ def edit_credential(profile_id):
     password = request.form.get("password", "").strip()
     sudo_password = request.form.get("sudo_password", "").strip()
     is_default = request.form.get("is_default") == "1"
+    clear_key = request.form.get("clear_key") == "1"
 
-    if private_key:
+    if not clear_key and private_key:
         eff_passphrase = passphrase if passphrase else (profile.passphrase or "")
         is_valid, err_msg = validate_ssh_key(private_key, eff_passphrase)
         if not is_valid:
             flash(f"Ошибка в SSH-ключе: {err_msg}", "danger")
             return redirect(url_for("credentials_view"))
-    elif passphrase and not clear_key and profile.private_key:
+    elif not clear_key and passphrase and profile.private_key:
         is_valid, err_msg = validate_ssh_key(profile.private_key, passphrase)
         if not is_valid:
             flash(f"Ошибка в парольной фразе: {err_msg}", "danger")
@@ -1233,7 +1234,6 @@ def edit_credential(profile_id):
     profile.ssh_port = ssh_port
     profile.become_method = become_method
 
-    clear_key = request.form.get("clear_key") == "1"
     if clear_key:
         profile.encrypted_private_key = None
         profile.encrypted_passphrase = None
