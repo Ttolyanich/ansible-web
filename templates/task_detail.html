@@ -24,15 +24,24 @@
                         {% if task.status == 'success' %}
                             <span class="px-2.5 py-0.5 rounded text-xs bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold">Успешно завершена</span>
                         {% elif task.status == 'running' %}
-                            <span class="px-2.5 py-0.5 rounded text-xs bg-blue-950 text-blue-300 border border-blue-800 font-semibold animate-pulse">Выполняется...</span>
+                            <span class="px-2.5 py-0.5 rounded text-xs bg-blue-950 text-blue-300 border border-blue-800 font-semibold animate-pulse">Выполняется (LIVE)...</span>
                         {% elif task.status == 'partial' %}
                             <span class="px-2.5 py-0.5 rounded text-xs bg-amber-950 text-amber-300 border border-amber-800 font-semibold">Завершена частично с ошибками</span>
                         {% elif task.status == 'failed' %}
                             <span class="px-2.5 py-0.5 rounded text-xs bg-red-950 text-red-300 border border-red-800 font-semibold">Ошибка выполнения</span>
+                        {% elif task.status == 'canceled' %}
+                            <span class="px-2.5 py-0.5 rounded text-xs bg-slate-800 text-amber-400 border border-amber-800 font-semibold">Прервана пользователем</span>
                         {% else %}
                             <span class="px-2.5 py-0.5 rounded text-xs bg-slate-800 text-slate-300">В очереди</span>
                         {% endif %}
                     </span>
+                    {% if task.status in ('running', 'pending') %}
+                    <form action="{{ url_for('cancel_task_view', task_id=task.id) }}" method="POST" onsubmit="return confirm('Вы уверены, что хотите прервать выполнение задачи?');" class="inline">
+                        <button type="submit" class="px-2.5 py-1 bg-red-900/60 hover:bg-red-600 text-red-200 hover:text-white text-[11px] font-semibold rounded border border-red-700/80 transition flex items-center gap-1 cursor-pointer">
+                            <i class="fa-solid fa-stop"></i> <span>Прервать задачу</span>
+                        </button>
+                    </form>
+                    {% endif %}
                 </div>
                 <h1 class="text-xl font-bold text-white tracking-tight">{{ task.summary }}</h1>
                 <p class="text-xs text-slate-400 mt-1">
@@ -140,12 +149,26 @@
     const isRunning = "{{ task.status }}" === "running" || "{{ task.status }}" === "pending";
 
     if (isRunning) {
-        // Poll every 3 seconds until completed
+        // Poll every 1.5 seconds for live output and completion
         const intervalId = setInterval(async () => {
             try {
                 const resp = await fetch("{{ url_for('api_task_status', task_id=task.id) }}");
                 if (resp.ok) {
                     const data = await resp.json();
+
+                    // Real-time log streaming
+                    if (data.log_output) {
+                        const preEl = document.getElementById('raw-log-output');
+                        if (preEl && preEl.textContent !== data.log_output) {
+                            const container = preEl.parentElement;
+                            const isNearBottom = (container.scrollHeight - container.scrollTop) <= (container.clientHeight + 100);
+                            preEl.textContent = data.log_output;
+                            if (isNearBottom) {
+                                container.scrollTop = container.scrollHeight;
+                            }
+                        }
+                    }
+
                     if (data.status !== "running" && data.status !== "pending") {
                         clearInterval(intervalId);
                         location.reload();
@@ -154,7 +177,7 @@
             } catch (err) {
                 console.error("Polling error:", err);
             }
-        }, 3000);
+        }, 1500);
     }
 
     function copyLogs() {

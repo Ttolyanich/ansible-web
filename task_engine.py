@@ -7,6 +7,7 @@ import tempfile
 import subprocess
 import logging
 import ctypes
+import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional, Tuple
@@ -15,6 +16,25 @@ logger = logging.getLogger(__name__)
 
 # Background executor for tasks
 executor = ThreadPoolExecutor(max_workers=4)
+active_task_processes: Dict[int, subprocess.Popen] = {}
+
+
+def cancel_task(task_id: int) -> bool:
+    """Terminates running subprocess for a given task ID."""
+    proc = active_task_processes.get(task_id)
+    if proc:
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                proc.kill()
+            return True
+        except Exception as e:
+            logger.warning(f"Error canceling task {task_id}: {e}")
+            return False
+    return False
+
 
 
 def enable_openssl_legacy_provider():
@@ -691,15 +711,59 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                     env["ANSIBLE_TIMEOUT"] = str(ssh_timeout)
                     env["ANSIBLE_TASK_TIMEOUT"] = "30"
 
-                    proc = subprocess.run(
+                    task.log_output = "".join(aggregated_logs)
+                    try:
+                        db.session.commit()
+                    except Exception:
+                        pass
+
+                    proc = subprocess.Popen(
                         cmd,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True,
-                        timeout=max(playbook_timeout, len(current_batch) * 3),
+                        bufsize=1,
                         env=env
                     )
-                    pass_output = proc.stdout
+                    active_task_processes[task_id] = proc
+
+                    pass_chunks = []
+                    last_flush = time.time()
+
+                    try:
+                        while True:
+                            # Check if task was canceled externally
+                            try:
+                                db.session.refresh(task)
+                                if task.status == "canceled":
+                                    proc.terminate()
+                                    break
+                            except Exception:
+                                pass
+
+                            line = proc.stdout.readline()
+                            if not line and proc.poll() is not None:
+                                break
+                            if line:
+                                pass_chunks.append(line)
+
+                            now = time.time()
+                            if (now - last_flush) >= 1.0 and pass_chunks:
+                                task.log_output = "".join(aggregated_logs) + "".join(pass_chunks)
+                                try:
+                                    db.session.commit()
+                                    last_flush = now
+                                except Exception:
+                                    db.session.rollback()
+
+                        proc.stdout.close()
+                        proc.wait(timeout=5)
+                    except Exception as ex:
+                        logger.warning(f"Process stream exception: {ex}")
+                    finally:
+                        active_task_processes.pop(task_id, None)
+
+                    pass_output = "".join(pass_chunks)
                 else:
                     # Simulation mode fallback
                     pass_output = f"[ANSIBLE-WEB SIMULATION - PASS {pass_num}]\nTarget hosts: {len(current_batch)}\n"
@@ -708,6 +772,11 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                         pass_output += f"{h.name} : ok=1 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\n"
 
                 aggregated_logs.append(pass_output)
+                task.log_output = "".join(aggregated_logs)
+                try:
+                    db.session.commit()
+                except Exception:
+                    pass
                 recap_results = parse_ansible_recap(pass_output)
 
                 # Process results of this pass

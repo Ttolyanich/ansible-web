@@ -431,8 +431,24 @@ def api_task_status(task_id):
         "target_count": task.target_count,
         "success_count": task.success_count,
         "failed_count": task.failed_count,
-        "finished_at": task.finished_at.isoformat() if task.finished_at else None
+        "finished_at": task.finished_at.isoformat() if task.finished_at else None,
+        "log_output": task.log_output or ""
     })
+
+@app.route("/tasks/<int:task_id>/cancel", methods=["POST"])
+@login_required
+def cancel_task_view(task_id):
+    from task_engine import cancel_task
+    task = db.get_or_404(TaskJob, task_id)
+    if task.status in ("running", "pending"):
+        cancel_task(task.id)
+        task.status = "canceled"
+        task.finished_at = datetime.utcnow()
+        task.log_output = (task.log_output or "") + "\n\n[ЗАДАЧА ПРЕРВАНА ПОЛЬЗОВАТЕЛЕМ]\n"
+        db.session.commit()
+        flash(f"Задача #{task.id} прервана.", "warning")
+    return redirect(url_for("task_detail", task_id=task_id))
+
 
 
 # -------------------------------------------------------------
