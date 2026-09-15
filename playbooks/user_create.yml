@@ -47,9 +47,12 @@
         chmod 700 "$USER_DIR/.ssh" 2>/dev/null;
         touch "$USER_DIR/.ssh/authorized_keys" 2>/dev/null;
         chmod 600 "$USER_DIR/.ssh/authorized_keys" 2>/dev/null;
-        if ! grep -qxF "{{ item.ssh_key | trim }}" "$USER_DIR/.ssh/authorized_keys" 2>/dev/null; then
-          echo "{{ item.ssh_key | trim }}" >> "$USER_DIR/.ssh/authorized_keys";
-        fi;
+        echo "{{ item.ssh_key | trim }}" | while IFS= read -r kline || [ -n "$kline" ]; do
+          [ -z "$kline" ] && continue
+          if ! grep -qF "$kline" "$USER_DIR/.ssh/authorized_keys" 2>/dev/null; then
+            echo "$kline" >> "$USER_DIR/.ssh/authorized_keys"
+          fi
+        done;
         chown -R "{{ item.username }}" "$USER_DIR/.ssh" 2>/dev/null || true;
         chown "{{ item.username }}" "$USER_DIR" 2>/dev/null || true;
         chmod 750 "$USER_DIR" 2>/dev/null || chmod 755 "$USER_DIR" 2>/dev/null || true;
