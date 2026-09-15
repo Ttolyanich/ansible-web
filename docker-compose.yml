@@ -3,17 +3,16 @@ services:
     image: ghcr.io/ttolyanich/ansible-web:latest
     build: .
     container_name: ansible-web
-    network_mode: host
     restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-5050}:5050"
     environment:
       - SECRET_KEY=${SECRET_KEY:-ansible-web-secret-key-prod-super-secure}
       - FERNET_KEY=${FERNET_KEY:-v1tX7e1eHnZtTqK_x6FvE9qL1pG2bA4sD6jK8mN0wQY=}
       - ANSIBLE_FORKS=${ANSIBLE_FORKS:-100}
       - ANSIBLE_TIMEOUT=${ANSIBLE_TIMEOUT:-15}
       - OPENSSL_CONF=/app/openssl_legacy.cnf
-      - PORT=${PORT:-5050}
-      - BIND_ADDRESS=${BIND_ADDRESS:-0.0.0.0}
-    command: ["gunicorn", "--bind", "${BIND_ADDRESS:-0.0.0.0}:${PORT:-5050}", "--workers", "2", "--threads", "4", "--timeout", "120", "app:app"]
+    command: ["gunicorn", "--bind", "0.0.0.0:5050", "--workers", "2", "--threads", "4", "--timeout", "120", "app:app"]
     volumes:
       - ./instance:/app/instance
       - ./playbooks:/app/playbooks
