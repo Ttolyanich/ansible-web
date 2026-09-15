@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   ansible-web:
     image: ghcr.io/ttolyanich/ansible-web:latest
