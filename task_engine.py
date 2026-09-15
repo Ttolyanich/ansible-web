@@ -528,7 +528,7 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
 
             if os.path.exists(key_file):
                 host_vars["ansible_ssh_private_key_file"] = key_file
-                host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes -o PubkeyAcceptedKeyTypes=+ssh-rsa,ssh-dss,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o PubkeyAcceptedAlgorithms=+ssh-rsa,ssh-dss,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o HostKeyAlgorithms=+ssh-rsa,ssh-dss,rsa-sha2-256,rsa-sha2-512,ssh-ed25519"
+                host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes -o PubkeyAcceptedKeyTypes=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o PubkeyAcceptedAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519"
                 if creds.get("passphrase"):
                     host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
                 use_key = True
