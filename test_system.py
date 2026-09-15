@@ -273,6 +273,72 @@ def test_os_detection_and_manual_preservation():
         db.session.commit()
         print("  [OK] Host is_os_manually_set flag verified.")
 
+def test_ssh_key_normalization_and_ping_escalation():
+    print("\n--- 9. Testing SSH Key Normalization & Ping Become Bypass ---")
+    from task_engine import normalize_private_key, write_clean_key_file, generate_inventory
+    from app import app, db
+    from models import Host, HostGroup, CredentialProfile
+    import tempfile
+
+    # 1. Test normalize_private_key
+    crlf_key = "-----BEGIN OPENSSH PRIVATE KEY-----\r\nb3BlbnNzaC1rZXktdjEAAAA\r\n-----END OPENSSH PRIVATE KEY-----\r\n"
+    normalized = normalize_private_key(crlf_key)
+    assert "\r" not in normalized, "Carriage returns must be stripped!"
+    assert normalized.endswith("\n"), "Must end with newline"
+    print("  [OK] normalize_private_key correctly strips CRLF.")
+
+    # 2. Test write_clean_key_file
+    with tempfile.TemporaryDirectory() as td:
+        target = os.path.join(td, "test_key")
+        write_clean_key_file(crlf_key, "", target)
+        assert os.path.exists(target)
+        with open(target, "rb") as f:
+            content = f.read()
+            assert b"\r" not in content, "Written key must have no CRLF!"
+    print("  [OK] write_clean_key_file writes clean binary key without CRLF.")
+
+    # 3. Test inventory generate with is_ping=True
+    with app.app_context():
+        grp = HostGroup.query.first()
+        h = Host.query.filter_by(zabbix_hostid="test-ping-host").first()
+        if not h:
+            h = Host(
+                zabbix_hostid="test-ping-host",
+                name="test-ping-host",
+                ip_address="10.20.8.25",
+                os_type="linux",
+                group_id=grp.id if grp else None
+            )
+            db.session.add(h)
+            db.session.commit()
+
+        creds = {
+            "auth_type": "key",
+            "user": "itsgsrv",
+            "private_key": crlf_key,
+            "become_method": "sudo",
+            "sudo_password": ""
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            # Ping mode -> no become!
+            inv_ping = generate_inventory([h], td, db.session, host_creds_map={str(h.id): creds}, is_ping=True)
+            with open(inv_ping, "r") as f:
+                data = yaml.safe_load(f)
+                hvars = data["all"]["hosts"]["test-ping-host"]
+                assert "ansible_become" not in hvars, "ansible_become must NOT be set when is_ping=True!"
+
+            # Normal mode -> become set!
+            inv_run = generate_inventory([h], td, db.session, host_creds_map={str(h.id): creds}, is_ping=False)
+            with open(inv_run, "r") as f:
+                data = yaml.safe_load(f)
+                hvars = data["all"]["hosts"]["test-ping-host"]
+                assert hvars.get("ansible_become") is True, "ansible_become MUST be set when is_ping=False!"
+
+        db.session.delete(h)
+        db.session.commit()
+    print("  [OK] is_ping bypass for privilege escalation verified.")
+
 if __name__ == "__main__":
     try:
         test_syntax()
@@ -283,6 +349,7 @@ if __name__ == "__main__":
         test_vpn_extraction_and_manual_override()
         test_ssh_port_handling()
         test_os_detection_and_manual_preservation()
+        test_ssh_key_normalization_and_ping_escalation()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")

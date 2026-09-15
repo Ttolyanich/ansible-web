@@ -158,7 +158,86 @@ def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
     return candidates
 
 
-def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: Optional[Dict[str, dict]] = None) -> str:
+def normalize_private_key(raw_key: Optional[str]) -> str:
+    """
+    Cleans up private key formatting:
+    - Normalizes CRLF and CR to standard Unix LF (\n)
+    - Removes trailing spaces on each line
+    - Ensures exactly one newline at the end
+    """
+    if not raw_key:
+        return ""
+    normalized = raw_key.replace("\r\n", "\n").replace("\r", "\n").strip()
+    clean_lines = [line.strip() for line in normalized.split("\n") if line.strip()]
+    if not clean_lines:
+        return ""
+    return "\n".join(clean_lines) + "\n"
+
+
+def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> None:
+    """
+    Writes private key ensuring:
+    1. Perfect Unix LF line endings (no \r or CRLF that causes 'error in libcrypto')
+    2. Decrypts passphrase via cryptography if present (or normalizes key)
+    3. Writes with strict binary encoding and 0600 permissions
+    """
+    clean_key = normalize_private_key(key_text)
+    if not clean_key:
+        return
+
+    final_content = clean_key
+
+    # Attempt to load and re-serialize through cryptography to guarantee OpenSSL/libcrypto compatibility
+    try:
+        from cryptography.hazmat.primitives import serialization
+        key_bytes = clean_key.encode("utf-8")
+        pass_bytes = passphrase.strip().encode("utf-8") if (passphrase and passphrase.strip()) else None
+
+        loaded_key = None
+        # Try OpenSSH format
+        try:
+            loaded_key = serialization.load_ssh_private_key(key_bytes, password=pass_bytes)
+        except Exception:
+            pass
+
+        # Try PEM format (RSA, EC, PKCS8)
+        if not loaded_key:
+            try:
+                loaded_key = serialization.load_pem_private_key(key_bytes, password=pass_bytes)
+            except Exception:
+                pass
+
+        if loaded_key:
+            # Successfully parsed! Re-export in clean unencrypted OpenSSH or Traditional PEM format
+            for enc_fmt in [
+                serialization.PrivateFormat.OpenSSH,
+                serialization.PrivateFormat.TraditionalOpenSSL,
+                serialization.PrivateFormat.PKCS8
+            ]:
+                try:
+                    exported = loaded_key.private_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=enc_fmt,
+                        encryption_algorithm=serialization.NoEncryption()
+                    ).decode("utf-8")
+                    final_content = normalize_private_key(exported)
+                    break
+                except Exception:
+                    continue
+    except Exception as ex:
+        logger.debug(f"Cryptography key export note: {ex}")
+
+    # Write as pure Unix bytes (\n only) in binary mode
+    with open(target_file, "wb") as f:
+        f.write(final_content.encode("utf-8"))
+
+    try:
+        os.chmod(target_file, 0o600)
+    except Exception:
+        pass
+
+
+def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: Optional[Dict[str, dict]] = None, is_ping: bool = False) -> str:
     """Generate YAML inventory file with resolved credentials and SSH options."""
     inventory_data = {
         "all": {
@@ -181,6 +260,10 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
     for host in hosts:
         if host_creds_map and host.name in host_creds_map:
             creds = host_creds_map[host.name]
+        elif host_creds_map and host.id in host_creds_map:
+            creds = host_creds_map[host.id]
+        elif host_creds_map and str(host.id) in host_creds_map:
+            creds = host_creds_map[str(host.id)]
         else:
             creds = resolve_credentials(host, db_session)
 
@@ -199,75 +282,18 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
             host_vars["ansible_shell_type"] = "cmd"
 
         # Handle Private Key vs Password
-        if creds.get("auth_type") == "key" and creds.get("private_key"):
-            key_content = creds["private_key"].strip() + "\n"
-            
-            # If private key has a passphrase, decrypt it in-memory for the temporary key file
-            if creds.get("passphrase"):
-                try:
-                    from cryptography.hazmat.primitives import serialization
-                    pass_bytes = creds["passphrase"].encode("utf-8")
-                    key_bytes = key_content.encode("utf-8")
-                    loaded_key = None
-
-                    try:
-                        loaded_key = serialization.load_ssh_private_key(key_bytes, password=pass_bytes)
-                    except Exception:
-                        pass
-
-                    if not loaded_key:
-                        try:
-                            loaded_key = serialization.load_pem_private_key(key_bytes, password=pass_bytes)
-                        except Exception:
-                            pass
-
-                    if loaded_key:
-                        for fmt in [
-                            serialization.PrivateFormat.TraditionalOpenSSL,
-                            serialization.PrivateFormat.OpenSSH,
-                            serialization.PrivateFormat.PKCS8
-                        ]:
-                            try:
-                                key_content = loaded_key.private_bytes(
-                                    encoding=serialization.Encoding.PEM,
-                                    format=fmt,
-                                    encryption_algorithm=serialization.NoEncryption()
-                                ).decode("utf-8")
-                                break
-                            except Exception:
-                                continue
-                except Exception as ex:
-                    logger.warning(f"Failed to decrypt private key for {host.name}: {ex}")
-                    if creds.get("passphrase"):
-                        host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
-
+        if (creds.get("auth_type") == "key" and creds.get("private_key")) or creds.get("private_key"):
             key_file = os.path.join(keys_dir, f"key_{host.id}_{abs(hash(creds['user'])) % 10000}")
-            with open(key_file, "w", encoding="utf-8") as kf:
-                kf.write(key_content)
-            try:
-                os.chmod(key_file, 0o600)
-            except Exception:
-                pass
+            write_clean_key_file(creds.get("private_key", ""), creds.get("passphrase", ""), key_file)
 
             host_vars["ansible_ssh_private_key_file"] = key_file
-            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes -o PubkeyAcceptedKeyTypes=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa -o HostKeyAlgorithms=+ssh-rsa"
+            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes -o PubkeyAcceptedKeyTypes=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o PubkeyAcceptedAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519"
             if creds.get("passphrase"):
                 host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
 
         elif creds.get("auth_type") == "password" and creds.get("password"):
             host_vars["ansible_password"] = creds["password"]
             # No BatchMode=yes so sshpass can pass the password
-
-        elif creds.get("private_key"):
-            key_file = os.path.join(keys_dir, f"key_{host.id}")
-            with open(key_file, "w", encoding="utf-8") as kf:
-                kf.write(creds["private_key"].strip() + "\n")
-            try:
-                os.chmod(key_file, 0o600)
-            except Exception:
-                pass
-            host_vars["ansible_ssh_private_key_file"] = key_file
-            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes"
 
         elif creds.get("password"):
             host_vars["ansible_password"] = creds["password"]
@@ -279,9 +305,9 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
             host_vars["ansible_ssh_private_key_file"] = "/root/.ssh/id_ed25519"
             host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes"
 
-        # Handle privilege escalation
-        if creds["become_method"] in ("sudo", "su") and host.os_type == "linux":
-            if creds["user"] != "root":
+        # Handle privilege escalation: NEVER escalate on ping checks!
+        if not is_ping and creds.get("become_method") in ("sudo", "su") and host.os_type == "linux":
+            if creds.get("user") != "root":
                 host_vars["ansible_become"] = True
                 host_vars["ansible_become_method"] = creds["become_method"]
                 if creds.get("sudo_password"):
@@ -454,7 +480,8 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
 
             batch_temp_dir = tempfile.mkdtemp(prefix=f"ansible_pass_{pass_num}_")
             try:
-                inventory_file = generate_inventory(current_batch, batch_temp_dir, db.session, current_creds_map)
+                is_ping = (playbook_name == "ping_check.yml")
+                inventory_file = generate_inventory(current_batch, batch_temp_dir, db.session, current_creds_map, is_ping=is_ping)
                 extra_vars_file = os.path.join(batch_temp_dir, "extra_vars.json")
                 with open(extra_vars_file, "w", encoding="utf-8") as evf:
                     json.dump(extra_vars, evf, ensure_ascii=False)

@@ -446,12 +446,15 @@ def credentials_view():
 @login_required
 @admin_required
 def create_credential():
+    from task_engine import normalize_private_key
+
     name = request.form.get("name", "").strip()
     os_type = request.form.get("os_type", "linux")
     ssh_user = request.form.get("ssh_user", "").strip()
     ssh_port = int(request.form.get("ssh_port", 22))
     become_method = request.form.get("become_method", "sudo")
-    private_key = request.form.get("private_key", "").strip()
+    raw_key = request.form.get("private_key", "").strip()
+    private_key = normalize_private_key(raw_key)
     passphrase = request.form.get("passphrase", "").strip()
     password = request.form.get("password", "").strip()
     sudo_password = request.form.get("sudo_password", "").strip()
@@ -490,6 +493,8 @@ def create_credential():
 @login_required
 @admin_required
 def edit_credential(profile_id):
+    from task_engine import normalize_private_key
+
     profile = db.get_or_404(CredentialProfile, profile_id)
 
     name = request.form.get("name", "").strip()
@@ -497,7 +502,8 @@ def edit_credential(profile_id):
     ssh_user = request.form.get("ssh_user", "").strip()
     ssh_port = int(request.form.get("ssh_port", 22))
     become_method = request.form.get("become_method", "sudo")
-    private_key = request.form.get("private_key", "").strip()
+    raw_key = request.form.get("private_key", "").strip()
+    private_key = normalize_private_key(raw_key)
     passphrase = request.form.get("passphrase", "").strip()
     password = request.form.get("password", "").strip()
     sudo_password = request.form.get("sudo_password", "").strip()
@@ -520,7 +526,8 @@ def edit_credential(profile_id):
 
     if password:
         profile.password = password
-        profile.auth_type = "password"
+        if not private_key and not profile.private_key:
+            profile.auth_type = "password"
 
     if sudo_password:
         profile.sudo_password = sudo_password
