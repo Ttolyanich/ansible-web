@@ -28,6 +28,65 @@
         exclusive: false
       register: linux_key_res
 
+    - name: "[Linux] Check if sudo is installed"
+      when: 
+        - os_type | default('linux') == 'linux'
+        - target_sudo | default(true) | bool
+      ansible.builtin.raw: which sudo || command -v sudo
+      register: sudo_check
+      failed_when: false
+      changed_when: false
+
+    - name: "[Linux] Install sudo package if missing (Debian / Ubuntu / CentOS / RHEL / Alpine)"
+      when: 
+        - os_type | default('linux') == 'linux'
+        - target_sudo | default(true) | bool
+        - sudo_check.rc != 0
+      ansible.builtin.raw: >
+        (command -v apt-get >/dev/null 2>&1 && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo) ||
+        (command -v yum >/dev/null 2>&1 && yum install -y sudo) ||
+        (command -v dnf >/dev/null 2>&1 && dnf install -y sudo) ||
+        (command -v apk >/dev/null 2>&1 && apk add sudo)
+      register: sudo_install_res
+      changed_when: sudo_install_res.rc == 0
+      failed_when: false
+
+    - name: "[Linux] Ensure /etc/sudoers.d directory exists"
+      when: 
+        - os_type | default('linux') == 'linux'
+        - target_sudo | default(true) | bool
+      ansible.builtin.file:
+        path: /etc/sudoers.d
+        state: directory
+        mode: '0750'
+        owner: root
+        group: root
+      failed_when: false
+
+    - name: "[Linux] Ensure /etc/sudoers includes /etc/sudoers.d"
+      when: 
+        - os_type | default('linux') == 'linux'
+        - target_sudo | default(true) | bool
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers
+        line: "#includedir /etc/sudoers.d"
+        state: present
+        validate: 'visudo -cf %s'
+      failed_when: false
+
+    - name: "[Linux] Add user to sudo/wheel groups if present"
+      when: 
+        - os_type | default('linux') == 'linux'
+        - target_sudo | default(true) | bool
+      ansible.builtin.user:
+        name: "{{ target_username }}"
+        groups: "{{ item }}"
+        append: true
+      loop:
+        - sudo
+        - wheel
+      failed_when: false
+
     - name: "[Linux] Configure sudoers permissions (NOPASSWD)"
       when: 
         - os_type | default('linux') == 'linux'
