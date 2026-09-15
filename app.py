@@ -306,7 +306,8 @@ def run_ping_batch():
 # -------------------------------------------------------------
 # Staff / Employees Directory
 # -------------------------------------------------------------
-@app.route("/staff")
+@app.route("/staff", endpoint="staff_view")
+@app.route("/staff", endpoint="staff_list")
 @login_required
 def staff_view():
     staff = StaffMember.query.order_by(StaffMember.name).all()
@@ -887,6 +888,18 @@ def delete_panel_user(user_id):
     db.session.commit()
     flash(f"Пользователь «{user.username}» удален.", "info")
     return redirect(url_for("users_view"))
+
+@app.errorhandler(500)
+def handle_internal_server_error(e):
+    import traceback
+    tb = traceback.format_exc()
+    return f"""
+    <div style="background:#0f172a;color:#e2e8f0;padding:24px;font-family:monospace;border-radius:12px;margin:20px;border:1px solid #334155">
+        <h2 style="color:#ef4444;margin-top:0">Internal Server Error (500)</h2>
+        <p style="color:#94a3b8">При обработке запроса произошла ошибка:</p>
+        <pre style="background:#020617;color:#fca5a5;padding:16px;border-radius:8px;overflow-x:auto;border:1px solid #1e293b">{tb}</pre>
+    </div>
+    """, 500
 
 
 # -------------------------------------------------------------
