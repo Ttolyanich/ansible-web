@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import subprocess
 import logging
+import ctypes
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional, Tuple
@@ -14,6 +15,58 @@ logger = logging.getLogger(__name__)
 
 # Background executor for tasks
 executor = ThreadPoolExecutor(max_workers=4)
+
+
+def enable_openssl_legacy_provider():
+    """
+    OpenSSL 3.0 (Debian 12/Ubuntu 22+) disables legacy algorithms like DES-EDE3-CBC by default.
+    Many older RSA keys use DES-EDE3-CBC encryption, which causes 'error in libcrypto'
+    in OpenSSH and 'unsupported algorithm' in cryptography.
+    This enables the legacy provider dynamically.
+    """
+    cfg_path = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
+    if not os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "openssl_conf = openssl_init\n\n"
+                    "[openssl_init]\n"
+                    "providers = provider_sect\n\n"
+                    "[provider_sect]\n"
+                    "default = default_sect\n"
+                    "legacy = legacy_sect\n\n"
+                    "[default_sect]\n"
+                    "activate = 1\n\n"
+                    "[legacy_sect]\n"
+                    "activate = 1\n"
+                )
+        except Exception:
+            pass
+    if os.path.exists(cfg_path):
+        os.environ["OPENSSL_CONF"] = cfg_path
+
+    # Also load legacy provider via libcrypto if accessible in current process
+    for lib_name in [
+        "/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+        "/usr/lib/aarch64-linux-gnu/libcrypto.so.3",
+        "libcrypto.so.3",
+        "libcrypto.so"
+    ]:
+        try:
+            lib = ctypes.CDLL(lib_name)
+            if hasattr(lib, "OSSL_PROVIDER_load"):
+                lib.OSSL_PROVIDER_load.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+                lib.OSSL_PROVIDER_load.restype = ctypes.c_void_p
+                lib.OSSL_PROVIDER_load(None, b"legacy")
+                lib.OSSL_PROVIDER_load(None, b"default")
+                break
+        except Exception:
+            continue
+
+
+# Enable on module import
+enable_openssl_legacy_provider()
+
 
 def resolve_credentials(host, db_session) -> Dict[str, Any]:
     """
@@ -214,6 +267,8 @@ def validate_ssh_key(raw_key: str, passphrase: str = "") -> Tuple[bool, str]:
     if not clean.startswith("-----BEGIN"):
         return False, "Неверный формат ключа: приватный SSH-ключ должен начинаться со строки '-----BEGIN ... PRIVATE KEY-----'."
 
+    enable_openssl_legacy_provider()
+
     # 4. Check loading & passphrase with cryptography
     try:
         from cryptography.hazmat.primitives import serialization
@@ -232,23 +287,33 @@ def validate_ssh_key(raw_key: str, passphrase: str = "") -> Tuple[bool, str]:
             except Exception:
                 pass
 
-        if not loaded:
-            # Check if failure was caused by missing or incorrect passphrase
-            try:
-                serialization.load_ssh_private_key(key_bytes, password=None)
-            except TypeError as te:
-                if "encrypted" in str(te).lower():
-                    return False, "Приватный ключ защищён парольной фразой! Пожалуйста, укажите 'Парольную фразу ключа' в поле профиля."
-            except Exception:
-                pass
+        # Fallback decryption via openssl CLI if cryptography struggles with legacy ciphers (e.g. DES-EDE3-CBC)
+        if not loaded and pass_bytes:
+            openssl_bin = shutil.which("openssl")
+            if openssl_bin:
+                try:
+                    env_sub = os.environ.copy()
+                    cfg_path = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
+                    if os.path.exists(cfg_path):
+                        env_sub["OPENSSL_CONF"] = cfg_path
+                    res = subprocess.run(
+                        [openssl_bin, "rsa", "-passin", f"pass:{passphrase.strip()}"],
+                        input=key_bytes,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=env_sub,
+                        timeout=5
+                    )
+                    if res.returncode == 0 and b"BEGIN RSA PRIVATE KEY" in res.stdout:
+                        loaded = True
+                except Exception as ex:
+                    logger.debug(f"openssl validate fallback: {ex}")
 
-            try:
-                serialization.load_pem_private_key(key_bytes, password=None)
-            except TypeError as te:
-                if "encrypted" in str(te).lower():
-                    return False, "Приватный ключ защищён парольной фразой! Пожалуйста, укажите 'Парольную фразу ключа' в поле профиля."
-            except Exception:
-                pass
+        if not loaded:
+            # Check if key is encrypted and requires a passphrase
+            is_encrypted = ("ENCRYPTED" in clean or "Proc-Type: 4,ENCRYPTED" in clean)
+            if is_encrypted and not pass_bytes:
+                return False, "Приватный ключ защищён парольной фразой! Пожалуйста, укажите 'Парольную фразу ключа' в поле профиля."
 
             if pass_bytes:
                 return False, "Не удалось расшифровать приватный ключ. Проверьте правильность введённой парольной фразы."
@@ -261,7 +326,7 @@ def validate_ssh_key(raw_key: str, passphrase: str = "") -> Tuple[bool, str]:
     return True, ""
 
 
-def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> None:
+def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> bool:
     """
     Writes private key ensuring:
     1. Perfect Unix LF line endings (no \r or CRLF that causes 'error in libcrypto')
@@ -270,17 +335,18 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> No
     """
     clean_key = normalize_private_key(key_text)
     if not clean_key:
-        return
+        return False
 
     final_content = clean_key
+    enable_openssl_legacy_provider()
 
     # Attempt to load and re-serialize through cryptography to guarantee OpenSSL/libcrypto compatibility
+    loaded_key = None
     try:
         from cryptography.hazmat.primitives import serialization
         key_bytes = clean_key.encode("utf-8")
         pass_bytes = passphrase.strip().encode("utf-8") if (passphrase and passphrase.strip()) else None
 
-        loaded_key = None
         # Try OpenSSH format
         try:
             loaded_key = serialization.load_ssh_private_key(key_bytes, password=pass_bytes)
@@ -294,7 +360,7 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> No
             except Exception:
                 pass
 
-        if loaded_key:
+        if loaded_key and hasattr(loaded_key, "private_bytes"):
             # Successfully parsed! Re-export in clean unencrypted OpenSSH or Traditional PEM format
             for enc_fmt in [
                 serialization.PrivateFormat.OpenSSH,
@@ -314,7 +380,30 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> No
     except Exception as ex:
         logger.debug(f"Cryptography key export note: {ex}")
 
-    # If key could not be loaded by cryptography, validate it before writing
+    # Fallback decryption via openssl CLI if cryptography could not deserialize legacy cipher (e.g. DES-EDE3-CBC)
+    if not loaded_key and (passphrase and passphrase.strip()):
+        openssl_bin = shutil.which("openssl")
+        if openssl_bin:
+            try:
+                env_sub = os.environ.copy()
+                cfg_path = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
+                if os.path.exists(cfg_path):
+                    env_sub["OPENSSL_CONF"] = cfg_path
+                res = subprocess.run(
+                    [openssl_bin, "rsa", "-passin", f"pass:{passphrase.strip()}"],
+                    input=clean_key.encode("utf-8"),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env_sub,
+                    timeout=5
+                )
+                if res.returncode == 0 and b"BEGIN RSA PRIVATE KEY" in res.stdout:
+                    final_content = normalize_private_key(res.stdout.decode("utf-8"))
+                    loaded_key = True
+            except Exception as ex:
+                logger.debug(f"openssl write fallback: {ex}")
+
+    # If key could not be decrypted/loaded, validate before writing
     if not loaded_key:
         is_val, _ = validate_ssh_key(clean_key, passphrase)
         if not is_val:
@@ -331,6 +420,7 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> No
         pass
 
     return True
+
 
 
 def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: Optional[Dict[str, dict]] = None, is_ping: bool = False) -> str:
@@ -371,7 +461,7 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
             "ansible_port": effective_port,
             "ansible_user": creds["user"],
             "os_type": target_os,
-            "ansible_ssh_common_args": "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ConnectionAttempts=2 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -o GSSAPIAuthentication=no -o TCPKeepAlive=yes"
+            "ansible_ssh_common_args": "-o ControlMaster=no -o ControlPersist=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ConnectionAttempts=2 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -o GSSAPIAuthentication=no -o TCPKeepAlive=yes"
         }
 
         if target_os == "windows":
@@ -396,13 +486,6 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
                 if write_clean_key_file(creds.get("private_key", ""), creds.get("passphrase", ""), key_file):
                     host_vars["ansible_ssh_private_key_file"] = key_file
                     host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes"
-
-        elif os.path.exists("/root/.ssh/id_rsa"):
-            host_vars["ansible_ssh_private_key_file"] = "/root/.ssh/id_rsa"
-            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes"
-        elif os.path.exists("/root/.ssh/id_ed25519"):
-            host_vars["ansible_ssh_private_key_file"] = "/root/.ssh/id_ed25519"
-            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes"
 
         # Handle privilege escalation: NEVER escalate on ping checks!
         if not is_ping and creds.get("become_method") in ("sudo", "su") and host.os_type == "linux":
@@ -598,6 +681,9 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                     cfg_path = os.path.join(os.path.dirname(__file__), "ansible.cfg")
                     if os.path.exists(cfg_path):
                         env["ANSIBLE_CONFIG"] = cfg_path
+                    openssl_cfg = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
+                    if os.path.exists(openssl_cfg):
+                        env["OPENSSL_CONF"] = openssl_cfg
                     env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
                     env["ANSIBLE_RETRY_FILES_ENABLED"] = "False"
                     env["ANSIBLE_STDOUT_CALLBACK"] = "default"

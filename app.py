@@ -15,7 +15,10 @@ from models import (
     HostGroup, Host, TaskJob, AuditLog
 )
 from zabbix_client import ZabbixClient, sync_zabbix_to_db
-from task_engine import dispatch_task
+from task_engine import dispatch_task, enable_openssl_legacy_provider
+
+enable_openssl_legacy_provider()
+
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "ansible-super-secret-key-default-change-me")
@@ -520,6 +523,11 @@ def edit_credential(profile_id):
         is_valid, err_msg = validate_ssh_key(private_key, eff_passphrase)
         if not is_valid:
             flash(f"Ошибка в SSH-ключе: {err_msg}", "danger")
+            return redirect(url_for("credentials_view"))
+    elif passphrase and not clear_key and profile.private_key:
+        is_valid, err_msg = validate_ssh_key(profile.private_key, passphrase)
+        if not is_valid:
+            flash(f"Ошибка в парольной фразе: {err_msg}", "danger")
             return redirect(url_for("credentials_view"))
 
     if name:
