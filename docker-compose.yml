@@ -5,14 +5,13 @@ services:
     image: ghcr.io/ttolyanich/ansible-web:latest
     build: .
     container_name: ansible-web
+    network_mode: host
     restart: unless-stopped
-    ports:
-      - "5050:5050"
     environment:
       - SECRET_KEY=${SECRET_KEY:-ansible-web-secret-key-prod-super-secure}
       - FERNET_KEY=${FERNET_KEY:-v1tX7e1eHnZtTqK_x6FvE9qL1pG2bA4sD6jK8mN0wQY=}
       - ANSIBLE_FORKS=${ANSIBLE_FORKS:-100}
-      - ANSIBLE_TIMEOUT=${ANSIBLE_TIMEOUT:-5}
+      - ANSIBLE_TIMEOUT=${ANSIBLE_TIMEOUT:-15}
       - PORT=5050
     volumes:
       - ./instance:/app/instance

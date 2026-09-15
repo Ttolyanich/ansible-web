@@ -344,7 +344,7 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
             "ansible_port": effective_port,
             "ansible_user": creds["user"],
             "os_type": target_os,
-            "ansible_ssh_common_args": "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 -o GSSAPIAuthentication=no -o TCPKeepAlive=yes"
+            "ansible_ssh_common_args": "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ConnectionAttempts=2 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -o GSSAPIAuthentication=no -o TCPKeepAlive=yes"
         }
 
         if target_os == "windows":

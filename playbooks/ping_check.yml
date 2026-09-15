@@ -9,4 +9,4 @@
       ansible.builtin.raw: echo PONG
       register: ping_test
       changed_when: false
-      timeout: 10
+      timeout: 20
