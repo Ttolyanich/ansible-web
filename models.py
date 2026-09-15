@@ -171,7 +171,8 @@ class Host(db.Model):
     zabbix_agent_ip = db.Column(db.String(100), default="") # original interface IP from Zabbix
     zabbix_description = db.Column(db.Text, default="") # host comment from Zabbix
     proxy_hostid = db.Column(db.String(50), default="0") # Zabbix proxy ID if behind proxy
-    os_type = db.Column(db.String(20), default="unknown") # 'linux', 'windows', 'unknown'
+    os_type = db.Column(db.String(20), default="unknown") # 'linux', 'windows', 'network', 'unknown'
+    is_os_manually_set = db.Column(db.Boolean, default=False) # Protected from Zabbix auto-detection override
     zabbix_templates = db.Column(db.Text, default="")
     group_id = db.Column(db.Integer, db.ForeignKey("host_groups.id", ondelete="CASCADE"), nullable=True)
     credential_id = db.Column(db.Integer, db.ForeignKey("credential_profiles.id", ondelete="SET NULL"), nullable=True)

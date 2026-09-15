@@ -48,7 +48,7 @@
     </div>
 
     <!-- Metric Cards Grid -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-4">
         <!-- Total -->
         <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
             <div class="flex items-center justify-between text-slate-400 mb-2">
@@ -109,6 +109,16 @@
             </div>
             <div class="text-3xl font-bold text-sky-400">{{ stats.windows }}</div>
             <div class="text-xs text-slate-500 mt-1">OpenSSH Server</div>
+        </div>
+
+        <!-- Network -->
+        <div class="bg-slate-900 border border-purple-900/30 p-4 rounded-xl">
+            <div class="flex items-center justify-between text-slate-400 mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wider text-purple-400">Сеть</span>
+                <i class="fa-solid fa-network-wired text-xl text-purple-400"></i>
+            </div>
+            <div class="text-3xl font-bold text-purple-400">{{ stats.network }}</div>
+            <div class="text-xs text-slate-500 mt-1">Switches / Routers</div>
         </div>
     </div>
 

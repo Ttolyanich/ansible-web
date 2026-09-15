@@ -235,6 +235,44 @@ def test_ssh_port_handling():
         db.session.commit()
         print("  [OK] Host custom SSH port inheritance in credentials and inventory verified.")
 
+def test_os_detection_and_manual_preservation():
+    print("\n--- 8. Testing OS Detection (Network/TP-Link/Linux/Win) & Manual Preservation ---")
+    from zabbix_client import detect_os_type
+    from app import app, db
+    from models import Host
+
+    # 1. Test detect_os_type heuristics
+    assert detect_os_type([], "tp-link-24g") == "network"
+    assert detect_os_type([], "office-tp-link-switch") == "network"
+    assert detect_os_type(["Template Net TP-LINK by SNMP"], "office-sw01") == "network"
+    assert detect_os_type([], "sw-cisco-core") == "network"
+    assert detect_os_type([], "rt-mikrotik-main") == "network"
+    assert detect_os_type(["Linux by Zabbix agent"], "tp-link-mon") == "linux"
+    assert detect_os_type([], "srv-deb-01") == "linux"
+    assert detect_os_type([], "srv-lin-web") == "linux"
+    assert detect_os_type([], "dc01-win-srv") == "windows"
+    assert detect_os_type([], "unknown-server") == "unknown"
+    print("  [OK] detect_os_type heuristics passed (TP-Link is network, not Linux).")
+
+    # 2. Test manual OS preservation
+    with app.app_context():
+        h = Host(
+            zabbix_hostid="test-host-manual-os",
+            name="tp-link-office",
+            ip_address="10.20.8.181",
+            os_type="network",
+            is_os_manually_set=True
+        )
+        db.session.add(h)
+        db.session.commit()
+
+        assert h.is_os_manually_set is True
+        assert h.os_type == "network"
+
+        db.session.delete(h)
+        db.session.commit()
+        print("  [OK] Host is_os_manually_set flag verified.")
+
 if __name__ == "__main__":
     try:
         test_syntax()
@@ -244,6 +282,7 @@ if __name__ == "__main__":
         test_candidate_credentials_fallback()
         test_vpn_extraction_and_manual_override()
         test_ssh_port_handling()
+        test_os_detection_and_manual_preservation()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")

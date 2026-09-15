@@ -2,7 +2,7 @@ import os
 import json
 from datetime import datetime
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, abort
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, abort, send_from_directory
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -65,6 +65,18 @@ scheduler.start()
 
 
 # -------------------------------------------------------------
+# Favicon Route
+# -------------------------------------------------------------
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(
+        os.path.join(app.root_path, "static"),
+        "favicon.svg",
+        mimetype="image/svg+xml"
+    )
+
+
+# -------------------------------------------------------------
 # Authentication Routes
 # -------------------------------------------------------------
 @app.route("/login", methods=["GET", "POST"])
@@ -106,6 +118,7 @@ def dashboard():
     unknown_hosts = Host.query.filter_by(is_enabled=True, last_status="unknown").count()
     linux_hosts = Host.query.filter_by(is_enabled=True, os_type="linux").count()
     windows_hosts = Host.query.filter_by(is_enabled=True, os_type="windows").count()
+    network_hosts = Host.query.filter_by(is_enabled=True, os_type="network").count()
 
     stats = {
         "total": total_hosts,
@@ -113,7 +126,8 @@ def dashboard():
         "offline": offline_hosts,
         "unknown": unknown_hosts,
         "linux": linux_hosts,
-        "windows": windows_hosts
+        "windows": windows_hosts,
+        "network": network_hosts
     }
 
     groups = HostGroup.query.order_by(HostGroup.name).all()
@@ -193,6 +207,15 @@ def host_detail(host_id):
             flash(f"Параметры подключения хоста {host.name} сброшены на значения из Zabbix ({host.ip_address}{port_str}).", "info")
             return redirect(url_for("host_detail", host_id=host.id))
 
+        if action == "reset_os":
+            host.is_os_manually_set = False
+            from zabbix_client import detect_os_type
+            templates = [t.strip() for t in (host.zabbix_templates or "").split(",") if t.strip()]
+            host.os_type = detect_os_type(templates, host.name)
+            db.session.commit()
+            flash(f"Тип ОС хоста {host.name} сброшен на автоопределение ({host.os_type}).", "info")
+            return redirect(url_for("host_detail", host_id=host.id))
+
         new_ip = request.form.get("ip_address", host.ip_address).strip()
         if new_ip and new_ip != host.ip_address:
             host.ip_address = new_ip
@@ -206,7 +229,11 @@ def host_detail(host_id):
         elif raw_port == "":
             host.ssh_port = None
 
-        host.os_type = request.form.get("os_type", host.os_type)
+        new_os = request.form.get("os_type", host.os_type)
+        if new_os and new_os != host.os_type:
+            host.os_type = new_os
+            host.is_os_manually_set = True
+
         cred_id = request.form.get("credential_id")
         host.credential_id = int(cred_id) if cred_id else None
         
@@ -679,6 +706,8 @@ def bootstrap_database():
                         conn.execute(db.text("ALTER TABLE hosts ADD COLUMN proxy_hostid VARCHAR(50) DEFAULT '0'"))
                     if "ssh_port" not in existing_cols:
                         conn.execute(db.text("ALTER TABLE hosts ADD COLUMN ssh_port INTEGER DEFAULT NULL"))
+                    if "is_os_manually_set" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN is_os_manually_set BOOLEAN DEFAULT 0"))
                     conn.commit()
         except Exception as e:
             print(f"[BOOTSTRAP] Migration notice: {e}")

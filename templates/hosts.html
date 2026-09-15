@@ -59,6 +59,7 @@
                     <option value="">Любая ОС</option>
                     <option value="linux" {% if filter_os == 'linux' %}selected{% endif %}>🐧 Linux</option>
                     <option value="windows" {% if filter_os == 'windows' %}selected{% endif %}>🪟 Windows</option>
+                    <option value="network" {% if filter_os == 'network' %}selected{% endif %}>🌐 Сеть (Network)</option>
                     <option value="unknown" {% if filter_os == 'unknown' %}selected{% endif %}>❓ Неизвестно</option>
                 </select>
             </div>
@@ -133,19 +134,28 @@
                                 </div>
                             </td>
                             <td class="py-3 px-4">
-                                {% if host.os_type == 'linux' %}
-                                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800">
-                                        <i class="fa-brands fa-linux"></i> Linux
-                                    </span>
-                                {% elif host.os_type == 'windows' %}
-                                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-sky-950/80 text-sky-300 border border-sky-800">
-                                        <i class="fa-brands fa-windows"></i> Windows
-                                    </span>
-                                {% else %}
-                                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-                                        <i class="fa-solid fa-question"></i> Неизвестно
-                                    </span>
-                                {% endif %}
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    {% if host.os_type == 'linux' %}
+                                        <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800">
+                                            <i class="fa-brands fa-linux"></i> Linux
+                                        </span>
+                                    {% elif host.os_type == 'windows' %}
+                                        <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-sky-950/80 text-sky-300 border border-sky-800">
+                                            <i class="fa-brands fa-windows"></i> Windows
+                                        </span>
+                                    {% elif host.os_type == 'network' %}
+                                        <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-800" title="Сетевое оборудование (Switch / Router / TP-Link)">
+                                            <i class="fa-solid fa-network-wired"></i> Сеть
+                                        </span>
+                                    {% else %}
+                                        <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                                            <i class="fa-solid fa-question"></i> Неизвестно
+                                        </span>
+                                    {% endif %}
+                                    {% if host.is_os_manually_set %}
+                                        <span class="text-[10px] text-amber-400" title="ОС закреплена вручную, защищена от Zabbix"><i class="fa-solid fa-lock text-[9px]"></i></span>
+                                    {% endif %}
+                                </div>
                             </td>
                             <td class="py-3 px-4 text-xs text-slate-300">
                                 {{ host.group.name if host.group else '-' }}

@@ -19,6 +19,8 @@
                         <i class="fa-brands fa-linux text-amber-400"></i>
                     {% elif host.os_type == 'windows' %}
                         <i class="fa-brands fa-windows text-sky-400"></i>
+                    {% elif host.os_type == 'network' %}
+                        <i class="fa-solid fa-network-wired text-purple-400"></i>
                     {% else %}
                         <i class="fa-solid fa-server text-slate-400"></i>
                     {% endif %}
@@ -92,13 +94,32 @@
 
                 <!-- OS Type -->
                 <div>
-                    <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Операционная система</label>
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider">Операционная система</label>
+                        {% if host.is_os_manually_set %}
+                            <span class="text-[11px] bg-amber-500/20 text-amber-400 border border-amber-500/40 px-2 py-0.5 rounded font-medium">
+                                <i class="fa-solid fa-lock text-[10px] mr-1"></i>Ручная (защищена от Zabbix)
+                            </span>
+                        {% else %}
+                            <span class="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-medium">
+                                <i class="fa-solid fa-wand-magic-sparkles text-[10px] mr-1"></i>Авто из Zabbix
+                            </span>
+                        {% endif %}
+                    </div>
                     <select name="os_type" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm focus:ring-2 focus:ring-red-500">
                         <option value="linux" {% if host.os_type == 'linux' %}selected{% endif %}>🐧 Linux (SSH, sudo, authorized_keys)</option>
                         <option value="windows" {% if host.os_type == 'windows' %}selected{% endif %}>🪟 Windows (OpenSSH, Administrators, net user)</option>
+                        <option value="network" {% if host.os_type == 'network' %}selected{% endif %}>🌐 Сетевое оборудование (Router / Switch / TP-Link / MikroTik)</option>
                         <option value="unknown" {% if host.os_type == 'unknown' %}selected{% endif %}>❓ Неизвестно</option>
                     </select>
-                    <p class="text-[11px] text-slate-500 mt-1">Определяет синтаксис плейбуков управления учетными записями</p>
+                    <div class="flex items-center justify-between mt-2 text-[11px] text-slate-400">
+                        <span>Определяет синтаксис плейбуков управления</span>
+                        {% if host.is_os_manually_set %}
+                            <button type="submit" name="action" value="reset_os" class="text-xs text-amber-400 hover:text-amber-300 underline inline-flex items-center gap-1 transition">
+                                <i class="fa-solid fa-rotate-left"></i> Сбросить на автоопределение
+                            </button>
+                        {% endif %}
+                    </div>
                 </div>
 
                 <!-- Credential Override -->

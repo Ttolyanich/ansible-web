@@ -154,21 +154,48 @@ class ZabbixClient:
         return groups_raw or [], hosts_raw or []
 
 
+NETWORK_KEYWORDS = [
+    "tp-link", "tplink", "cisco", "mikrotik", "routeros", "keenetic",
+    "d-link", "dlink", "zyxel", "eltex", "huawei", "juniper", "fortigate",
+    "fortinet", "ubiquiti", "unifi", "edgerouter", "netgear", "aruba",
+    "switch", "router", "коммутатор", "роутер", "маршрутизатор", "свитч"
+]
+LINUX_NAME_PATTERN = re.compile(r'(?:^|[_\-.])(?:deb|ubn|ubuntu|centos|rhel|debian|lin)(?:[_\-.\d]|$)', re.IGNORECASE)
+WINDOWS_NAME_PATTERN = re.compile(r'(?:^|[_\-.])(?:win|dc|rds|srv-win)(?:[_\-.\d]|$)', re.IGNORECASE)
+NETWORK_NAME_PATTERN = re.compile(r'(?:^|[_\-.])(?:sw|rt|switch|router|tplink|tp-link|dlink|d-link|mikrotik|cisco|keenetic|zyxel|eltex|ap|gw)(?:[_\-.\d]|$)', re.IGNORECASE)
+
 def detect_os_type(template_names: list, host_name: str = "") -> str:
-    """Heuristic to detect OS from Zabbix templates."""
+    """
+    Heuristic to detect OS or device type from Zabbix templates and host names.
+    Returns: 'linux', 'windows', 'network', or 'unknown'.
+    """
     t_lower = " ".join([t.lower() for t in template_names])
+    h_lower = host_name.lower()
+
+    # 1. Check explicit official Zabbix Agent templates
+    if "windows by" in t_lower or "windows agent" in t_lower:
+        return "windows"
+    if "linux by" in t_lower or "linux agent" in t_lower or "linux generic" in t_lower:
+        return "linux"
+
+    # 2. Check network equipment templates (SNMP, Switches, Routers, TP-Link, MikroTik, Cisco)
+    if any(k in t_lower for k in NETWORK_KEYWORDS):
+        return "network"
+
+    # 3. Check general OS keywords in templates
     if "windows" in t_lower or "win by" in t_lower:
         return "windows"
-    if "linux" in t_lower or "linux by" in t_lower or "unix" in t_lower or "ubuntu" in t_lower or "centos" in t_lower or "debian" in t_lower:
+    if any(l in t_lower for l in ["linux", "unix", "ubuntu", "centos", "debian", "redhat", "rhel"]):
         return "linux"
-    
-    # Fallback to host name heuristic
-    h_lower = host_name.lower()
-    if any(win_tag in h_lower for win_tag in ["-win", "win-", "_win", "win_", "dc0", "rds"]):
+
+    # 4. Check host name heuristics with safe boundary patterns (avoids tp-link matching -lin)
+    if any(k in h_lower for k in NETWORK_KEYWORDS) or NETWORK_NAME_PATTERN.search(host_name):
+        return "network"
+    if WINDOWS_NAME_PATTERN.search(host_name):
         return "windows"
-    if any(lin_tag in h_lower for lin_tag in ["-deb", "-ubn", "-centos", "-lin", "lin-", "_lin"]):
+    if LINUX_NAME_PATTERN.search(host_name):
         return "linux"
-        
+
     return "unknown"
 
 
@@ -212,9 +239,11 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
 
     linux_count = 0
     windows_count = 0
+    network_count = 0
     unknown_count = 0
     vpn_count = 0
     manual_ip_count = 0
+    manual_os_count = 0
     custom_port_count = 0
 
     for h_data in hosts_raw:
@@ -251,6 +280,8 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
             linux_count += 1
         elif os_type == "windows":
             windows_count += 1
+        elif os_type == "network":
+            network_count += 1
         else:
             unknown_count += 1
 
@@ -287,8 +318,11 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
                 custom_port_count += 1
 
             # Keep manual override if set, otherwise update detected OS
-            if host.os_type in ("unknown", None) or os_type != "unknown":
-                host.os_type = os_type
+            if host.is_os_manually_set:
+                manual_os_count += 1
+            else:
+                if host.os_type in ("unknown", None) or os_type != "unknown":
+                    host.os_type = os_type
             host.zabbix_templates = ", ".join(template_names)
             if primary_group_id:
                 host.group_id = primary_group_id
@@ -304,6 +338,7 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
                 ip_address=effective_ip,
                 ssh_port=vpn_port,
                 is_ip_manually_set=False,
+                is_os_manually_set=False,
                 ip_source=effective_source,
                 zabbix_agent_ip=ip,
                 zabbix_description=description,
@@ -329,10 +364,12 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
         extra_details.append(f"VPN из описания: {vpn_count}")
     if manual_ip_count > 0:
         extra_details.append(f"Ручных IP: {manual_ip_count}")
+    if manual_os_count > 0:
+        extra_details.append(f"Ручных ОС: {manual_os_count}")
     if custom_port_count > 0:
         extra_details.append(f"Кастомных портов SSH: {custom_port_count}")
     extra_str = f" | {', '.join(extra_details)}" if extra_details else ""
-    msg = f"Синхронизировано групп: {len(zabbix_group_map)}, хостов: {total_hosts} (Linux: {linux_count}, Windows: {windows_count}, Прочие: {unknown_count}{extra_str})"
+    msg = f"Синхронизировано групп: {len(zabbix_group_map)}, хостов: {total_hosts} (Linux: {linux_count}, Windows: {windows_count}, Сеть: {network_count}, Прочие: {unknown_count}{extra_str})"
     
     zabbix_setting.last_sync_status = "success"
     zabbix_setting.last_sync_message = msg
