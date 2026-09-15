@@ -46,6 +46,8 @@
                                 <span class="text-red-400"><i class="fa-solid fa-user-minus mr-1"></i> Delete User</span>
                             {% elif task.task_type == 'zabbix_sync' %}
                                 <span class="text-blue-400"><i class="fa-solid fa-arrows-rotate mr-1"></i> Zabbix Sync</span>
+                            {% elif task.task_type == 'playbook_run' %}
+                                <span class="text-amber-400"><i class="fa-solid fa-scroll mr-1"></i> Playbook Run</span>
                             {% else %}
                                 <span>{{ task.task_type }}</span>
                             {% endif %}

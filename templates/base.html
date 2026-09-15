@@ -135,6 +135,11 @@
                     <span class="sidebar-text whitespace-nowrap">Учетные записи</span>
                 </a>
 
+                <a href="{{ url_for('playbooks_view') }}" title="Плейбуки & Автоматизация" class="nav-item flex items-center px-3 py-2.5 rounded-lg transition {% if request.endpoint in ['playbooks_view', 'playbook_new', 'playbook_edit', 'playbook_run'] %}bg-red-600 text-white font-semibold shadow-md shadow-red-950/40{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                    <i class="fa-solid fa-book-bookmark mr-3 text-sm w-5 text-center shrink-0"></i>
+                    <span class="sidebar-text whitespace-nowrap">Плейбуки</span>
+                </a>
+
                 <a href="{{ url_for('tasks_view') }}" title="Задачи & Логи" class="nav-item flex items-center px-3 py-2.5 rounded-lg transition {% if request.endpoint in ['tasks_view', 'task_detail'] %}bg-red-600 text-white font-semibold shadow-md shadow-red-950/40{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
                     <i class="fa-solid fa-list-check mr-3 text-sm w-5 text-center shrink-0"></i>
                     <span class="sidebar-text whitespace-nowrap">Задачи & Логи</span>

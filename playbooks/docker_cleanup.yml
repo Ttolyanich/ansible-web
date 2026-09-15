@@ -1,0 +1,32 @@
+---
+- name: Docker Maintenance & System Prune
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Check if Docker is installed
+      ansible.builtin.raw: which docker || command -v docker
+      register: docker_check
+      changed_when: false
+      failed_when: false
+
+    - name: Clean up unused Docker resources
+      when: docker_check.rc == 0
+      ansible.builtin.raw: docker system prune -f --volumes
+      register: docker_prune_res
+
+    - name: Check Docker disk usage after prune
+      when: docker_check.rc == 0
+      ansible.builtin.raw: docker system df
+      register: docker_df_res
+      changed_when: false
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            'Docker очищен на ' + inventory_hostname + '. Текущее использование: ' + (docker_df_res.stdout | default(''))
+            if docker_check.rc == 0
+            else 'Docker не установлен на ' + inventory_hostname
+          }}

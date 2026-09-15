@@ -1,7 +1,9 @@
 import os
 import json
+import re
 from datetime import datetime
 from functools import wraps
+import yaml
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, abort, send_from_directory
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from dotenv import load_dotenv
@@ -562,6 +564,362 @@ def run_user_ops():
     )
 
     flash(f"Задача «{summary}» успешно запущена!", "success")
+    return redirect(url_for("task_detail", task_id=task_id))
+
+
+
+# -------------------------------------------------------------
+# Playbooks & Automation Catalog
+# -------------------------------------------------------------
+PLAYBOOKS_DIR = os.path.join(os.path.dirname(__file__), "playbooks")
+SYSTEM_PLAYBOOKS = {"ping_check.yml", "user_create.yml", "user_delete.yml"}
+
+
+def get_playbook_meta(filename: str):
+    playbook_path = os.path.join(PLAYBOOKS_DIR, filename)
+    is_system = filename in SYSTEM_PLAYBOOKS
+    meta = {
+        "filename": filename,
+        "is_system": is_system,
+        "title": filename,
+        "description": "",
+        "tasks_count": 0,
+        "size_kb": 0.0,
+        "modified_str": "-",
+        "icon": "fa-solid fa-scroll",
+        "icon_bg": "bg-slate-800 text-slate-300",
+    }
+    if not os.path.exists(playbook_path):
+        return meta
+
+    try:
+        st = os.stat(playbook_path)
+        meta["size_kb"] = round(st.st_size / 1024.0, 1)
+        meta["modified_str"] = datetime.fromtimestamp(st.st_mtime).strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        pass
+
+    try:
+        with open(playbook_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        data = yaml.safe_load(content)
+        if isinstance(data, list) and len(data) > 0:
+            first_play = data[0] if isinstance(data[0], dict) else {}
+            play_name = first_play.get("name")
+            if play_name:
+                meta["title"] = play_name
+            total_tasks = 0
+            for play in data:
+                if isinstance(play, dict) and "tasks" in play and isinstance(play["tasks"], list):
+                    total_tasks += len(play["tasks"])
+            meta["tasks_count"] = total_tasks
+    except Exception:
+        pass
+
+    fn = filename.lower()
+    if fn == "ping_check.yml":
+        meta["title"] = "Быстрая проверка доступности SSH"
+        meta["description"] = "Экспресс-тест SSH подключения ко всем серверам без выполнения тяжелых модулей."
+        meta["icon"] = "fa-solid fa-bolt"
+        meta["icon_bg"] = "bg-emerald-500/10 text-emerald-400"
+    elif fn == "user_create.yml":
+        meta["title"] = "Создание учетных записей & SSH-ключей"
+        meta["description"] = "Массовое создание системных пользователей, настройка sudo и открытых SSH-ключей."
+        meta["icon"] = "fa-solid fa-user-plus"
+        meta["icon_bg"] = "bg-purple-500/10 text-purple-400"
+    elif fn == "user_delete.yml":
+        meta["title"] = "Отзыв доступа & удаление пользователей"
+        meta["description"] = "Завершение процессов пользователя, удаление домашних каталогов и sudo-прав."
+        meta["icon"] = "fa-solid fa-user-minus"
+        meta["icon_bg"] = "bg-red-500/10 text-red-400"
+    elif "system_update" in fn:
+        meta["title"] = meta["title"] if meta["title"] != filename else "Безопасное обновление пакетов ОС"
+        meta["description"] = "Обновление репозиториев и пакетов безопасности (apt-get / yum / dnf / apk)."
+        meta["icon"] = "fa-solid fa-arrows-rotate"
+        meta["icon_bg"] = "bg-sky-500/10 text-sky-400"
+    elif "service_restart" in fn:
+        meta["title"] = meta["title"] if meta["title"] != filename else "Управление системной службой systemd"
+        meta["description"] = "Перезапуск, перезагрузка конфигурации, запуск или остановка любого сервиса."
+        meta["icon"] = "fa-solid fa-gears"
+        meta["icon_bg"] = "bg-amber-500/10 text-amber-400"
+    elif "disk_space" in fn or "audit" in fn:
+        meta["title"] = meta["title"] if meta["title"] != filename else "Экспресс-аудит дисков и ресурсов"
+        meta["description"] = "Сбор информации об использовании диска (df -h), оперативной памяти и uptime."
+        meta["icon"] = "fa-solid fa-hard-drive"
+        meta["icon_bg"] = "bg-teal-500/10 text-teal-400"
+    elif "docker" in fn:
+        meta["title"] = meta["title"] if meta["title"] != filename else "Очистка и обслуживание Docker"
+        meta["description"] = "Удаление остановленных контейнеров, неиспользуемых сетей и висячих образов."
+        meta["icon"] = "fa-brands fa-docker"
+        meta["icon_bg"] = "bg-blue-500/10 text-blue-400"
+    else:
+        if not meta.get("description"):
+            meta["description"] = "Пользовательский сценарий Ansible для управления серверами."
+        meta["icon"] = "fa-solid fa-file-code"
+        meta["icon_bg"] = "bg-indigo-500/10 text-indigo-400"
+
+    return meta
+
+
+@app.route("/playbooks")
+@login_required
+def playbooks_view():
+    os.makedirs(PLAYBOOKS_DIR, exist_ok=True)
+    all_files = [
+        f for f in os.listdir(PLAYBOOKS_DIR) 
+        if (f.endswith(".yml") or f.endswith(".yaml")) and os.path.isfile(os.path.join(PLAYBOOKS_DIR, f))
+    ]
+    all_files.sort(key=lambda name: (0 if name in SYSTEM_PLAYBOOKS else 1, name.lower()))
+    playbooks = [get_playbook_meta(f) for f in all_files]
+    return render_template("playbooks.html", playbooks=playbooks)
+
+
+@app.route("/playbooks/new")
+@login_required
+def playbook_new():
+    sample_content = """---
+- name: Custom Automation Playbook
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Test connectivity & Echo
+      ansible.builtin.debug:
+        msg: "Running task on host: {{ inventory_hostname }}"
+"""
+    return render_template(
+        "playbook_edit.html",
+        is_new=True,
+        is_system=False,
+        filename="custom_task.yml",
+        content=sample_content
+    )
+
+
+@app.route("/playbooks/<path:filename>/edit")
+@login_required
+def playbook_edit(filename):
+    clean_filename = os.path.basename(filename)
+    file_path = os.path.join(PLAYBOOKS_DIR, clean_filename)
+    if not os.path.exists(file_path):
+        flash(f"Плейбук «{clean_filename}» не найден.", "danger")
+        return redirect(url_for("playbooks_view"))
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    is_system = clean_filename in SYSTEM_PLAYBOOKS
+    return render_template(
+        "playbook_edit.html",
+        is_new=False,
+        is_system=is_system,
+        filename=clean_filename,
+        content=content
+    )
+
+
+@app.route("/playbooks/save", methods=["POST"])
+@login_required
+def playbook_save():
+    is_new = request.form.get("is_new") == "true"
+    orig_filename = os.path.basename(request.form.get("original_filename", "").strip())
+    filename = os.path.basename(request.form.get("filename", "").strip())
+    content = request.form.get("content", "")
+
+    if not filename.endswith(".yml") and not filename.endswith(".yaml"):
+        filename += ".yml"
+
+    if not re.match(r"^[a-zA-Z0-9_\-\.]+\.(yml|yaml)$", filename):
+        flash("Некорректное имя файла. Разрешены только латинские буквы, цифры, дефис, подчеркивание и расширение .yml", "danger")
+        return redirect(request.referrer or url_for("playbooks_view"))
+
+    if not is_new and orig_filename in SYSTEM_PLAYBOOKS and filename != orig_filename:
+        flash("Имя системного плейбука не может быть изменено!", "danger")
+        return redirect(url_for("playbook_edit", filename=orig_filename))
+
+    try:
+        yaml.safe_load(content)
+    except Exception as e:
+        flash(f"Ошибка синтаксиса YAML: {e}", "danger")
+        return render_template(
+            "playbook_edit.html",
+            is_new=is_new,
+            is_system=(filename in SYSTEM_PLAYBOOKS),
+            filename=filename,
+            content=content
+        )
+
+    os.makedirs(PLAYBOOKS_DIR, exist_ok=True)
+    target_path = os.path.join(PLAYBOOKS_DIR, filename)
+    with open(target_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="PLAYBOOK_SAVE",
+        target=filename,
+        description=f"{'Создан' if is_new else 'Отредактирован'} плейбук {filename}"
+    )
+    db.session.add(audit)
+    db.session.commit()
+
+    flash(f"Плейбук «{filename}» успешно сохранен!", "success")
+    return redirect(url_for("playbooks_view"))
+
+
+@app.route("/playbooks/<path:filename>/delete", methods=["POST"])
+@login_required
+def playbook_delete(filename):
+    clean_filename = os.path.basename(filename)
+    if clean_filename in SYSTEM_PLAYBOOKS:
+        flash(f"Плейбук «{clean_filename}» является системным и защищен от удаления!", "danger")
+        return redirect(url_for("playbooks_view"))
+
+    file_path = os.path.join(PLAYBOOKS_DIR, clean_filename)
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+            audit = AuditLog(
+                user_id=current_user.id,
+                action="PLAYBOOK_DELETE",
+                target=clean_filename,
+                description=f"Удален пользовательский плейбук {clean_filename}"
+            )
+            db.session.add(audit)
+            db.session.commit()
+            flash(f"Плейбук «{clean_filename}» успешно удален.", "success")
+        except Exception as e:
+            flash(f"Ошибка при удалении файла: {e}", "danger")
+    else:
+        flash(f"Файл «{clean_filename}» не найден.", "warning")
+
+    return redirect(url_for("playbooks_view"))
+
+
+@app.route("/playbooks/<path:filename>/download")
+@login_required
+def playbook_download(filename):
+    clean_filename = os.path.basename(filename)
+    return send_from_directory(PLAYBOOKS_DIR, clean_filename, as_attachment=True)
+
+
+@app.route("/api/playbooks/validate", methods=["POST"])
+@login_required
+def api_playbook_validate():
+    data = request.get_json(silent=True) or {}
+    yaml_content = data.get("yaml_content", "")
+    if not yaml_content.strip():
+        return jsonify({"valid": False, "error": "Содержимое плейбука пустое."})
+    try:
+        parsed = yaml.safe_load(yaml_content)
+        play_count = len(parsed) if isinstance(parsed, list) else 1
+        task_count = 0
+        if isinstance(parsed, list):
+            for play in parsed:
+                if isinstance(play, dict) and "tasks" in play and isinstance(play["tasks"], list):
+                    task_count += len(play["tasks"])
+        return jsonify({"valid": True, "play_count": play_count, "task_count": task_count})
+    except Exception as e:
+        return jsonify({"valid": False, "error": str(e)})
+
+
+@app.route("/playbooks/<path:filename>/run")
+@login_required
+def playbook_run(filename):
+    clean_filename = os.path.basename(filename)
+    file_path = os.path.join(PLAYBOOKS_DIR, clean_filename)
+    if not os.path.exists(file_path):
+        flash(f"Плейбук «{clean_filename}» не найден.", "danger")
+        return redirect(url_for("playbooks_view"))
+
+    meta = get_playbook_meta(clean_filename)
+    all_hosts = Host.query.order_by(Host.name.asc()).all()
+    groups = HostGroup.query.order_by(HostGroup.name.asc()).all()
+
+    return render_template(
+        "playbook_run.html",
+        filename=clean_filename,
+        is_system=meta["is_system"],
+        playbook_title=meta["title"],
+        playbook_description=meta["description"],
+        tasks_count=meta["tasks_count"],
+        all_hosts=all_hosts,
+        groups=groups
+    )
+
+
+@app.route("/playbooks/<path:filename>/run", methods=["POST"], endpoint="playbook_run_post")
+@login_required
+def playbook_run_post(filename):
+    clean_filename = os.path.basename(filename)
+    file_path = os.path.join(PLAYBOOKS_DIR, clean_filename)
+    if not os.path.exists(file_path):
+        flash(f"Плейбук «{clean_filename}» не найден.", "danger")
+        return redirect(url_for("playbooks_view"))
+
+    target_type = request.form.get("target_type", "all")
+    target_os = request.form.get("target_os", "linux")
+    extra_vars_raw = request.form.get("extra_vars_json", "").strip()
+
+    extra_vars = {}
+    if extra_vars_raw:
+        try:
+            extra_vars = json.loads(extra_vars_raw)
+            if not isinstance(extra_vars, dict):
+                extra_vars = {"data": extra_vars}
+        except Exception:
+            try:
+                loaded = yaml.safe_load(extra_vars_raw)
+                if isinstance(loaded, dict):
+                    extra_vars = loaded
+            except Exception as e:
+                flash(f"Ошибка в формате дополнительных переменных: {e}", "danger")
+                return redirect(url_for("playbook_run", filename=clean_filename))
+
+    query = Host.query
+    if target_type == "preselected":
+        selected_ids = request.form.getlist("selected_hosts")
+        if not selected_ids:
+            flash("Не выбрано ни одного сервера для запуска.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        try:
+            int_ids = [int(i) for i in selected_ids if str(i).isdigit()]
+        except Exception:
+            int_ids = []
+        if not int_ids:
+            flash("Список выбранных серверов пуст.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        query = query.filter(Host.id.in_(int_ids))
+    elif target_type == "group":
+        group_id = request.form.get("group_id")
+        if not group_id:
+            flash("Не выбрана целевая группа.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        query = query.filter_by(group_id=int(group_id))
+
+    if target_os in ("linux", "windows"):
+        query = query.filter_by(os_type=target_os)
+
+    target_hosts = query.all()
+    if not target_hosts:
+        flash("Не найдено серверов, соответствующих критериям фильтрации.", "warning")
+        return redirect(url_for("playbook_run", filename=clean_filename))
+
+    host_ids = [h.id for h in target_hosts]
+    meta = get_playbook_meta(clean_filename)
+    summary = f"Сценарий «{meta['title']}» ({clean_filename}) на {len(host_ids)} серверах"
+
+    task_id = dispatch_task(
+        app=app,
+        task_type="playbook_run",
+        playbook_name=clean_filename,
+        host_ids=host_ids,
+        extra_vars=extra_vars,
+        user_id=current_user.id,
+        summary=summary,
+        filter_info=f"Сценарий: {clean_filename}, Цели: {target_type}, ОС: {target_os}"
+    )
+
+    flash(f"Задача «{summary}» успешно поставлена в очередь и выполняется!", "success")
     return redirect(url_for("task_detail", task_id=task_id))
 
 

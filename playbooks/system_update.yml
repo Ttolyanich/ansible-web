@@ -1,0 +1,53 @@
+---
+- name: Safe System & Package Updates
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Detect OS package manager
+      ansible.builtin.raw: >
+        if command -v apt-get >/dev/null 2>&1; then echo "apt";
+        elif command -v dnf >/dev/null 2>&1; then echo "dnf";
+        elif command -v yum >/dev/null 2>&1; then echo "yum";
+        elif command -v apk >/dev/null 2>&1; then echo "apk";
+        else echo "unknown"; fi
+      register: pkg_manager
+      changed_when: false
+
+    - name: "[APT] Update repositories cache & upgrade packages"
+      when: "'apt' in pkg_manager.stdout"
+      ansible.builtin.raw: >
+        export DEBIAN_FRONTEND=noninteractive &&
+        apt-get update -qq &&
+        apt-get upgrade -y -qq &&
+        apt-get autoremove -y -qq
+      register: apt_upgrade_res
+
+    - name: "[DNF/YUM] Update all packages"
+      when: "'dnf' in pkg_manager.stdout or 'yum' in pkg_manager.stdout"
+      ansible.builtin.raw: >
+        if command -v dnf >/dev/null 2>&1; then
+          dnf upgrade -y --refresh
+        else
+          yum update -y
+        fi
+      register: yum_upgrade_res
+
+    - name: "[APK] Upgrade all packages (Alpine)"
+      when: "'apk' in pkg_manager.stdout"
+      ansible.builtin.raw: apk update && apk upgrade
+      register: apk_upgrade_res
+
+    - name: Check if system reboot is required (Debian/Ubuntu)
+      when: "'apt' in pkg_manager.stdout"
+      ansible.builtin.raw: test -f /var/run/reboot-required && echo "REBOOT_REQUIRED" || echo "OK"
+      register: reboot_check
+      changed_when: false
+
+    - name: Display update status summary
+      ansible.builtin.debug:
+        msg: >-
+          Package upgrade completed on {{ inventory_hostname }}.
+          Package manager: {{ pkg_manager.stdout | trim }}.
+          Reboot needed: {{ (reboot_check.stdout | default('OK')) | trim }}.

@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+
+{% block title %}{% if is_new %}Создание плейбука{% else %}Редактирование: {{ filename }}{% endif %}{% endblock %}
+
+{% block content %}
+<div class="space-y-5">
+    <!-- Breadcrumb & Top Controls -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-slate-900 border border-slate-800 p-4 rounded-xl gap-3 shadow-sm">
+        <div class="flex items-center space-x-3">
+            <a href="{{ url_for('playbooks_view') }}" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition border border-slate-700 text-xs">
+                <i class="fa-solid fa-arrow-left"></i>
+            </a>
+            <div>
+                <h1 class="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                    <i class="fa-solid fa-code text-red-500"></i>
+                    {% if is_new %}
+                        <span>Создание нового плейбука</span>
+                    {% else %}
+                        <span>Редактирование: <span class="font-mono text-slate-300">{{ filename }}</span></span>
+                    {% endif %}
+                </h1>
+                <p class="text-xs text-slate-400">
+                    {% if is_system %}
+                        <span class="text-blue-400 font-semibold"><i class="fa-solid fa-shield-halved mr-1"></i>Системный сценарий</span> (рекомендуется соблюдать аккуратность)
+                    {% else %}
+                        Пользовательский сценарий автоматизации Ansible YAML
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2 w-full sm:w-auto">
+            <button type="button" id="btn-validate" onclick="validateYaml()" class="flex-1 sm:flex-none px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center justify-center gap-2">
+                <i class="fa-solid fa-check-double text-emerald-400"></i>
+                <span>Проверить синтаксис</span>
+            </button>
+            <button type="submit" form="playbook-form" class="flex-1 sm:flex-none px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-lg shadow-md shadow-red-950/40 transition flex items-center justify-center gap-2">
+                <i class="fa-solid fa-floppy-disk"></i>
+                <span>Сохранить</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Live Validation Message Banner -->
+    <div id="validation-banner" class="hidden p-3.5 rounded-xl border text-xs flex items-start gap-3 transition-all duration-300">
+        <i id="validation-icon" class="fa-solid text-base mt-0.5 shrink-0"></i>
+        <div class="flex-1 min-w-0">
+            <div id="validation-title" class="font-bold"></div>
+            <div id="validation-desc" class="mt-0.5 font-mono text-[11px] break-all"></div>
+        </div>
+        <button type="button" onclick="document.getElementById('validation-banner').classList.add('hidden')" class="text-slate-400 hover:text-white p-1">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+    </div>
+
+    <!-- Main Editor Form -->
+    <form id="playbook-form" action="{{ url_for('playbook_save') }}" method="POST" class="space-y-4">
+        <input type="hidden" name="is_new" value="{{ 'true' if is_new else 'false' }}">
+        <input type="hidden" name="original_filename" value="{{ filename }}">
+
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm space-y-4">
+            <!-- Row: Filename + Starter Template Dropdown -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                        <i class="fa-regular fa-file-lines text-red-400"></i>
+                        <span>Имя файла плейбука (.yml)</span>
+                    </label>
+                    <div class="relative">
+                        <input type="text" name="filename" id="filename-input" value="{{ filename }}" required
+                               pattern="^[a-zA-Z0-9_\-\.]+\.(yml|yaml)$"
+                               title="Имя должно оканчиваться на .yml или .yaml и содержать только латинские буквы, цифры, дефис или подчеркивание"
+                               placeholder="my_playbook.yml"
+                               {% if not is_new and is_system %}readonly{% endif %}
+                               class="w-full px-3.5 py-2 rounded-lg bg-slate-950 border border-slate-700 text-white font-mono text-xs focus:ring-2 focus:ring-red-500 focus:outline-none {% if not is_new and is_system %}opacity-75 cursor-not-allowed{% endif %}">
+                    </div>
+                    <p class="text-[11px] text-slate-500 mt-1">Допустимы латиница, цифры, знаки «-», «_», расширение .yml</p>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                        <i class="fa-solid fa-wand-magic-sparkles text-amber-400"></i>
+                        <span>Вставить готовый шаблон / сниппет</span>
+                    </label>
+                    <select id="template-selector" onchange="applyPresetTemplate(this.value)" class="w-full px-3.5 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-200 text-xs focus:ring-2 focus:ring-red-500 focus:outline-none">
+                        <option value="">-- Выберите готовый шаблон для быстрой вставки --</option>
+                        <option value="empty">1. Базовый пустой плейбук (Boilerplate)</option>
+                        <option value="pkg_install">2. Установка пакета (apt / yum / dnf)</option>
+                        <option value="service_control">3. Управление службой systemd</option>
+                        <option value="raw_command">4. Выполнение Bash / Shell скрипта с выводом</option>
+                        <option value="file_copy">5. Создание / Запись конфигурационного файла</option>
+                        <option value="docker_run">6. Запуск / Перезапуск Docker контейнера</option>
+                        <option value="port_check">7. Проверка доступности порта (wait_for)</option>
+                        <option value="reboot_safe">8. Безопасная перезагрузка сервера</option>
+                    </select>
+                    <p class="text-[11px] text-slate-500 mt-1">Автоматически заполнит редактор готовым проверенным кодом</p>
+                </div>
+            </div>
+
+            <!-- Code Editor Box -->
+            <div>
+                <div class="flex justify-between items-center bg-slate-950 px-3.5 py-2 border border-slate-800 rounded-t-lg text-xs text-slate-400">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span>
+                        <span class="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span>
+                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
+                        <span class="font-mono text-slate-400 ml-2">YAML Editor (Tab = 2 spaces)</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span id="line-counter" class="font-mono text-[11px] text-slate-500">Строк: 0</span>
+                        <button type="button" onclick="formatYamlSpaces()" title="Форматировать табуляцию в 2 пробела" class="hover:text-white transition">
+                            <i class="fa-solid fa-indent mr-1"></i>2 пробела
+                        </button>
+                    </div>
+                </div>
+                <textarea name="content" id="yaml-code" rows="22" required spellcheck="false"
+                          placeholder="---&#10;- name: My Task&#10;  hosts: all&#10;  gather_facts: false&#10;  tasks:&#10;    - name: Hello World&#10;      ansible.builtin.debug:&#10;        msg: 'Hello from {{ inventory_hostname }}'"
+                          class="w-full p-4 rounded-b-lg bg-slate-950 border-x border-b border-slate-800 text-slate-100 font-mono text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-red-500/80 resize-y whitespace-pre tab-size-2">{{ content }}</textarea>
+            </div>
+        </div>
+    </form>
+
+    <!-- Tips & Quick Variables Reference Card -->
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm text-xs space-y-3">
+        <div class="font-bold text-white flex items-center gap-2">
+            <i class="fa-solid fa-lightbulb text-amber-400"></i>
+            <span>Полезные переменные и модули Ansible:</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-slate-300">
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
+                <code class="text-red-400 font-bold font-mono">ansible.builtin.raw</code>
+                <p class="text-[11px] text-slate-400 mt-1">Выполняет прямую команду SSH без необходимости наличия Python на хосте.</p>
+            </div>
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
+                <code class="text-indigo-400 font-bold font-mono">&#123;&#123; inventory_hostname &#125;&#125;</code>
+                <p class="text-[11px] text-slate-400 mt-1">Имя текущего хоста из инвентаря (или IP-адрес).</p>
+            </div>
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
+                <code class="text-emerald-400 font-bold font-mono">become: true</code>
+                <p class="text-[11px] text-slate-400 mt-1">Повышение привилегий через sudo с автоподстановкой пароля из профиля.</p>
+            </div>
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
+                <code class="text-purple-400 font-bold font-mono">&#123;&#123; my_var | default('val') &#125;&#125;</code>
+                <p class="text-[11px] text-slate-400 mt-1">Поддержка внешних переменных (`extra_vars`), передаваемых при запуске.</p>
+            </div>
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
+                <code class="text-amber-400 font-bold font-mono">changed_when: false</code>
+                <p class="text-[11px] text-slate-400 mt-1">Предотвращает пометку задачи как «изменено» при чтении данных (диск, память).</p>
+            </div>
+            <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80">
+                <code class="text-sky-400 font-bold font-mono">ansible.builtin.debug</code>
+                <p class="text-[11px] text-slate-400 mt-1">Выводит текст или зарегистрированный вывод `register.stdout` прямо в Live-лог веб-панели.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Key intercept: Tab key inserts 2 spaces inside textarea
+const textarea = document.getElementById('yaml-code');
+const lineCounter = document.getElementById('line-counter');
+
+function updateLineCount() {
+    const lines = textarea.value.split('\n').length;
+    lineCounter.textContent = 'Строк: ' + lines;
+}
+
+textarea.addEventListener('input', updateLineCount);
+updateLineCount();
+
+textarea.addEventListener('keydown', function(e) {
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        this.value = this.value.substring(0, start) + "  " + this.value.substring(end);
+        this.selectionStart = this.selectionEnd = start + 2;
+        updateLineCount();
+    }
+});
+
+// Format replacement
+function formatYamlSpaces() {
+    textarea.value = textarea.value.replace(/\t/g, '  ');
+    updateLineCount();
+}
+
+// Preset Snippets
+{% raw %}
+const PRESET_TEMPLATES = {
+    empty: `---
+- name: Custom Maintenance Task
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Print Hello
+      ansible.builtin.debug:
+        msg: "Executing on {{ inventory_hostname }}"
+`,
+
+    pkg_install: `---
+- name: Install Packages
+  hosts: all
+  gather_facts: false
+  become: true
+
+  vars:
+    package_name: "{{ target_package | default('htop') }}"
+
+  tasks:
+    - name: Install package on Debian/Ubuntu
+      ansible.builtin.raw: >
+        (command -v apt-get >/dev/null && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y {{ package_name }}) ||
+        (command -v yum >/dev/null && yum install -y {{ package_name }}) ||
+        (command -v dnf >/dev/null && dnf install -y {{ package_name }})
+      register: install_res
+
+    - name: Verification
+      ansible.builtin.debug:
+        msg: "Пакет {{ package_name }} установлен на {{ inventory_hostname }}"
+`,
+
+    service_control: `---
+- name: Service Management
+  hosts: all
+  gather_facts: false
+  become: true
+
+  vars:
+    srv_name: "{{ target_service | default('nginx') }}"
+    srv_state: "{{ service_state | default('restarted') }}"
+
+  tasks:
+    - name: Manage service state
+      ansible.builtin.service:
+        name: "{{ srv_name }}"
+        state: "{{ srv_state }}"
+      register: srv_res
+
+    - name: Check status
+      ansible.builtin.raw: systemctl is-active {{ srv_name }} || service {{ srv_name }} status
+      register: status_res
+      changed_when: false
+
+    - name: Status report
+      ansible.builtin.debug:
+        msg: "Сервис {{ srv_name }} на {{ inventory_hostname }}: {{ status_res.stdout | trim }}"
+`,
+
+    raw_command: `---
+- name: Run Bash Command
+  hosts: all
+  gather_facts: false
+  become: false
+
+  vars:
+    cmd_to_run: "{{ raw_command | default('uname -a && uptime') }}"
+
+  tasks:
+    - name: Execute raw command
+      ansible.builtin.raw: "{{ cmd_to_run }}"
+      register: cmd_res
+      changed_when: false
+
+    - name: Display Output
+      ansible.builtin.debug:
+        msg: |
+          === [РЕЗУЛЬТАТ НА {{ inventory_hostname }}] ===
+          {{ cmd_res.stdout }}
+`,
+
+    file_copy: `---
+- name: Deploy Configuration File
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Create or update config file
+      ansible.builtin.copy:
+        dest: /tmp/sample_config.conf
+        content: |
+          # Generated by Ansible Web Console
+          server_id={{ inventory_hostname }}
+          created_at={{ ansible_date_time.iso8601 | default('now') }}
+        mode: '0644'
+`,
+
+    docker_run: `---
+- name: Manage Docker Container
+  hosts: all
+  gather_facts: false
+  become: true
+
+  vars:
+    container_name: "{{ target_container | default('my-app') }}"
+
+  tasks:
+    - name: Check container status
+      ansible.builtin.raw: docker ps -a --filter "name={{ container_name }}" --format "{{.Names}}: {{.Status}}"
+      register: docker_res
+      changed_when: false
+
+    - name: Display container info
+      ansible.builtin.debug:
+        msg: "Контейнер на {{ inventory_hostname }}: {{ docker_res.stdout | trim }}"
+`,
+
+    port_check: `---
+- name: Check Network Port Connectivity
+  hosts: all
+  gather_facts: false
+  become: false
+
+  vars:
+    check_host: "{{ target_check_host | default('1.1.1.1') }}"
+    check_port: "{{ target_check_port | default(443) }}"
+
+  tasks:
+    - name: Test TCP socket connection
+      ansible.builtin.wait_for:
+        host: "{{ check_host }}"
+        port: "{{ check_port }}"
+        timeout: 5
+        state: started
+      register: port_res
+
+    - name: Port connectivity status
+      ansible.builtin.debug:
+        msg: "Порт {{ check_host }}:{{ check_port }} доступен с хоста {{ inventory_hostname }}"
+`,
+
+    reboot_safe: `---
+- name: Safe System Reboot
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Reboot host and wait for connection
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+        post_reboot_delay: 15
+        test_command: uptime
+`
+};
+{% endraw %}
+
+function applyPresetTemplate(key) {
+    if (!key || !PRESET_TEMPLATES[key]) return;
+    if (textarea.value.trim() !== "" && !confirm("Заменить текущий код плейбука выбранным шаблоном?")) {
+        return;
+    }
+    textarea.value = PRESET_TEMPLATES[key];
+    updateLineCount();
+    validateYaml();
+}
+
+// AJAX Validation
+function validateYaml() {
+    const banner = document.getElementById('validation-banner');
+    const icon = document.getElementById('validation-icon');
+    const title = document.getElementById('validation-title');
+    const desc = document.getElementById('validation-desc');
+    const code = textarea.value;
+
+    banner.classList.remove('hidden', 'bg-emerald-950/80', 'border-emerald-700', 'text-emerald-200', 'bg-red-950/80', 'border-red-700', 'text-red-200');
+
+    fetch("{{ url_for('api_playbook_validate') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ yaml_content: code })
+    })
+    .then(res => res.json())
+    .then(data => {
+        banner.classList.remove('hidden');
+        if (data.valid) {
+            banner.classList.add('bg-emerald-950/80', 'border-emerald-700', 'text-emerald-200');
+            icon.className = "fa-solid fa-circle-check text-emerald-400 text-base mt-0.5 shrink-0";
+            title.textContent = "Синтаксис YAML корректен!";
+            desc.textContent = `Обнаружено блоков: ${data.play_count}, задач: ${data.task_count}`;
+        } else {
+            banner.classList.add('bg-red-950/80', 'border-red-700', 'text-red-200');
+            icon.className = "fa-solid fa-triangle-exclamation text-red-400 text-base mt-0.5 shrink-0";
+            title.textContent = "Ошибка синтаксиса YAML:";
+            desc.textContent = data.error;
+        }
+    })
+    .catch(err => {
+        banner.classList.remove('hidden');
+        banner.classList.add('bg-red-950/80', 'border-red-700', 'text-red-200');
+        icon.className = "fa-solid fa-circle-xmark text-red-400 text-base mt-0.5 shrink-0";
+        title.textContent = "Ошибка соединения с сервером";
+        desc.textContent = err.toString();
+    });
+}
+</script>
+{% endblock %}

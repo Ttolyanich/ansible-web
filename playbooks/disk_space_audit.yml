@@ -1,0 +1,34 @@
+---
+- name: System Resources & Disk Space Audit
+  hosts: all
+  gather_facts: false
+  become: false
+
+  tasks:
+    - name: Collect Uptime and Load Average
+      ansible.builtin.raw: uptime
+      register: uptime_res
+      changed_when: false
+
+    - name: Collect Root Filesystem Disk Usage
+      ansible.builtin.raw: df -h /
+      register: df_res
+      changed_when: false
+
+    - name: Collect Memory Usage
+      ansible.builtin.raw: free -m || free -h || vmstat -s
+      register: free_res
+      changed_when: false
+
+    - name: Display Server Audit Report
+      ansible.builtin.debug:
+        msg: |
+          === [ОТЧЕТ АУДИТА: {{ inventory_hostname }}] ===
+          UPTIME & LOAD:
+          {{ uptime_res.stdout | trim }}
+          
+          ДИСКОВОЕ ПРОСТРАНСТВО (/):
+          {{ df_res.stdout | trim }}
+          
+          ПАМЯТЬ (ОЗУ):
+          {{ free_res.stdout | trim }}

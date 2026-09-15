@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+
+{% block title %}Запуск плейбука: {{ filename }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6 max-w-5xl mx-auto">
+    <!-- Breadcrumbs & Header -->
+    <div class="flex items-center justify-between bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-sm">
+        <div class="flex items-center space-x-3.5">
+            <a href="{{ url_for('playbooks_view') }}" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition border border-slate-700 text-xs">
+                <i class="fa-solid fa-arrow-left"></i>
+            </a>
+            <div>
+                <div class="flex items-center gap-2">
+                    <h1 class="text-xl font-bold text-white tracking-tight">Запуск плейбука: <span class="text-red-400 font-mono">{{ filename }}</span></h1>
+                    {% if is_system %}
+                    <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-blue-950/80 text-blue-300 border border-blue-800/60">
+                        Системный
+                    </span>
+                    {% endif %}
+                </div>
+                <p class="text-xs text-slate-400 mt-0.5">{{ playbook_title }}</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <a href="{{ url_for('playbook_edit', filename=filename) }}" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+                <i class="fa-solid fa-code text-indigo-400"></i>
+                <span>Код сценария</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- Playbook Information Summary Card -->
+    <div class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+        <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 text-base shrink-0">
+                <i class="fa-solid fa-list-check"></i>
+            </div>
+            <div>
+                <div class="font-bold text-white">Шагов в плейбуке: {{ tasks_count }}</div>
+                <div class="text-slate-400 text-[11px] mt-0.5">{{ playbook_description or 'Параметры и задачи будут последовательно выполнены на целевых хостах.' }}</div>
+            </div>
+        </div>
+        <div class="flex items-center gap-2 font-mono text-[11px] text-slate-400 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+            <i class="fa-solid fa-server text-slate-500"></i>
+            <span>В базе всего серверов: <strong class="text-white">{{ all_hosts|length }}</strong></span>
+        </div>
+    </div>
+
+    <!-- Execution Form -->
+    <form action="{{ url_for('playbook_run_post', filename=filename) }}" method="POST" id="run-form" onsubmit="return confirmLaunch()" class="space-y-5">
+        <!-- STEP 1: Target Hosts Selection -->
+        <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl space-y-4">
+            <h2 class="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs">1</span>
+                <span>Где выполнять плейбук? (Целевые серверы)</span>
+            </h2>
+
+            <!-- Scope selector radio tabs -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <label class="cursor-pointer">
+                    <input type="radio" name="target_type" value="all" class="peer sr-only" checked onchange="toggleTargetScope()">
+                    <div class="p-3.5 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/20 text-xs transition">
+                        <div class="font-bold text-white flex items-center justify-between">
+                            <span>Все активные серверы</span>
+                            <i class="fa-solid fa-network-wired text-red-400"></i>
+                        </div>
+                        <div class="text-slate-400 text-[11px] mt-1">Вся доступная инфраструктура ({{ all_hosts|length }} шт.)</div>
+                    </div>
+                </label>
+
+                <label class="cursor-pointer">
+                    <input type="radio" name="target_type" value="group" class="peer sr-only" onchange="toggleTargetScope()">
+                    <div class="p-3.5 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/20 text-xs transition">
+                        <div class="font-bold text-white flex items-center justify-between">
+                            <span>По группе / компании</span>
+                            <i class="fa-solid fa-folder-tree text-indigo-400"></i>
+                        </div>
+                        <div class="text-slate-400 text-[11px] mt-1">Все серверы определенной группы</div>
+                    </div>
+                </label>
+
+                <label class="cursor-pointer">
+                    <input type="radio" name="target_type" value="preselected" class="peer sr-only" onchange="toggleTargetScope()">
+                    <div class="p-3.5 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/20 text-xs transition">
+                        <div class="font-bold text-white flex items-center justify-between">
+                            <span>Выборочные серверы</span>
+                            <i class="fa-solid fa-list-check text-emerald-400"></i>
+                        </div>
+                        <div class="text-slate-400 text-[11px] mt-1">Выбрано вручную: <span id="selected-counter" class="font-mono text-emerald-400 font-bold">0</span> шт.</div>
+                    </div>
+                </label>
+            </div>
+
+            <!-- Group Selector Row -->
+            <div id="scope-group-wrapper" class="hidden pt-2">
+                <label class="block text-xs font-semibold text-slate-300 mb-1.5">Выберите группу серверов:</label>
+                <select name="group_id" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-2 focus:ring-red-500 focus:outline-none">
+                    {% for g in groups %}
+                    <option value="{{ g.id }}">
+                        {{ g.name }} ({{ g.hosts.all()|length if g.hosts.all is defined else g.hosts|length }} серверов)
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Preselected Host Picker Row -->
+            <div id="scope-preselected-wrapper" class="hidden pt-2 space-y-2">
+                <div class="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-xs">
+                    <div class="flex items-center gap-2">
+                        <input type="text" id="host-search" placeholder="Поиск по имени или IP..." onkeyup="filterHostList()" class="px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-white text-xs placeholder-slate-500 focus:outline-none w-52">
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="selectAllHosts(true)" class="text-xs text-red-400 hover:text-red-300 font-medium">Выбрать все</button>
+                        <span class="text-slate-600">|</span>
+                        <button type="button" onclick="selectAllHosts(false)" class="text-xs text-slate-400 hover:text-slate-300 font-medium">Сбросить</button>
+                    </div>
+                </div>
+
+                <div class="max-h-60 overflow-y-auto border border-slate-800 rounded-lg divide-y divide-slate-800/80 bg-slate-950/60 p-1" id="hosts-container">
+                    {% for h in all_hosts %}
+                    <label class="flex items-center justify-between p-2 hover:bg-slate-900 rounded cursor-pointer host-item-row" data-name="{{ h.name|lower }}" data-ip="{{ (h.ip or '')|lower }}">
+                        <div class="flex items-center gap-2.5">
+                            <input type="checkbox" name="selected_hosts" value="{{ h.id }}" onchange="updateSelectedCount()" class="host-checkbox rounded border-slate-700 bg-slate-900 text-red-600 focus:ring-red-500">
+                            <span class="text-xs font-semibold text-white">{{ h.name }}</span>
+                            <span class="text-[11px] font-mono text-slate-400">({{ h.ip or 'No IP' }})</span>
+                        </div>
+                        <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{{ h.os_type }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- OS Filter -->
+            <div class="pt-2 border-t border-slate-800/80">
+                <label class="block text-xs font-semibold text-slate-300 mb-1.5">Фильтр по операционной системе (опционально):</label>
+                <select name="target_os" class="w-full sm:w-72 px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-2 focus:ring-red-500 focus:outline-none">
+                    <option value="all">Все ОС (Linux и Windows)</option>
+                    <option value="linux" selected>Только Linux серверы</option>
+                    <option value="windows">Только Windows серверы</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- STEP 2: Extra Variables (extra_vars) -->
+        <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl space-y-4">
+            <div class="flex items-center justify-between">
+                <h2 class="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <span class="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs">2</span>
+                    <span>Переменные сценария (Extra Vars)</span>
+                </h2>
+                <button type="button" onclick="formatExtraVarsJson()" class="text-xs text-indigo-400 hover:text-indigo-300 transition flex items-center gap-1">
+                    <i class="fa-solid fa-code"></i> Форматировать JSON
+                </button>
+            </div>
+
+            <!-- Interactive quick parameters helper if applicable -->
+            {% if 'service_restart' in filename %}
+            <div class="p-3 bg-slate-950 rounded-lg border border-slate-800 space-y-2 text-xs">
+                <div class="font-bold text-amber-400 flex items-center gap-1.5">
+                    <i class="fa-solid fa-bolt"></i> Быстрая настройка параметров сервиса:
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-[11px] text-slate-400 block mb-1">Имя сервиса (target_service):</label>
+                        <input type="text" id="quick-srv-name" placeholder="nginx, docker, ssh..." value="nginx" oninput="syncQuickServiceVars()" class="w-full px-3 py-1.5 rounded bg-slate-900 border border-slate-700 text-white font-mono text-xs">
+                    </div>
+                    <div>
+                        <label class="text-[11px] text-slate-400 block mb-1">Действие (service_state):</label>
+                        <select id="quick-srv-state" onchange="syncQuickServiceVars()" class="w-full px-3 py-1.5 rounded bg-slate-900 border border-slate-700 text-white font-mono text-xs">
+                            <option value="restarted" selected>restarted (перезапуск)</option>
+                            <option value="reloaded">reloaded (перечитать конфиг)</option>
+                            <option value="started">started (запустить)</option>
+                            <option value="stopped">stopped (остановить)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <div>
+                <label class="block text-xs text-slate-400 mb-1.5">
+                    Переменные в формате JSON (передаются в Ansible через <code>-e</code> / extra-vars):
+                </label>
+                <textarea name="extra_vars_json" id="extra-vars-input" rows="5"
+                          class="w-full p-3.5 rounded-lg bg-slate-950 border border-slate-700 text-emerald-400 font-mono text-xs focus:ring-2 focus:ring-red-500 focus:outline-none">{ {% if 'service_restart' in filename %}"target_service": "nginx", "service_state": "restarted"{% endif %} }</textarea>
+                <p class="text-[11px] text-slate-500 mt-1">Оставьте пустым или <code>{}</code>, если плейбук не требует внешних аргументов.</p>
+            </div>
+        </div>
+
+        <!-- Submit Launch Button -->
+        <div class="flex items-center justify-between bg-slate-900 border border-slate-800 p-5 rounded-xl">
+            <div class="text-xs text-slate-400">
+                После нажатия задача будет отправлена в фоновый исполнитель, откроется окно с Live-выводом логов.
+            </div>
+            <button type="submit" class="px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold text-sm rounded-lg shadow-lg shadow-red-950/60 transition flex items-center gap-2">
+                <i class="fa-solid fa-play"></i>
+                <span>Запустить выполнение</span>
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+function toggleTargetScope() {
+    const scope = document.querySelector('input[name="target_type"]:checked').value;
+    document.getElementById('scope-group-wrapper').classList.toggle('hidden', scope !== 'group');
+    document.getElementById('scope-preselected-wrapper').classList.toggle('hidden', scope !== 'preselected');
+}
+
+function updateSelectedCount() {
+    const count = document.querySelectorAll('.host-checkbox:checked').length;
+    document.getElementById('selected-counter').textContent = count;
+}
+
+function selectAllHosts(state) {
+    const checkboxes = document.querySelectorAll('.host-checkbox');
+    checkboxes.forEach(cb => {
+        // Only select if not hidden by search filter
+        const row = cb.closest('.host-item-row');
+        if (row.style.display !== 'none') {
+            cb.checked = state;
+        }
+    });
+    updateSelectedCount();
+}
+
+function filterHostList() {
+    const q = document.getElementById('host-search').value.toLowerCase().trim();
+    const rows = document.querySelectorAll('.host-item-row');
+    rows.forEach(row => {
+        const name = row.dataset.name || '';
+        const ip = row.dataset.ip || '';
+        if (name.includes(q) || ip.includes(q)) {
+            row.style.display = 'flex';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+
+function syncQuickServiceVars() {
+    const srvName = document.getElementById('quick-srv-name')?.value.trim() || 'nginx';
+    const srvState = document.getElementById('quick-srv-state')?.value || 'restarted';
+    const vars = {
+        target_service: srvName,
+        service_state: srvState
+    };
+    document.getElementById('extra-vars-input').value = JSON.stringify(vars, null, 2);
+}
+
+function formatExtraVarsJson() {
+    const input = document.getElementById('extra-vars-input');
+    try {
+        const parsed = JSON.parse(input.value.trim() || '{}');
+        input.value = JSON.stringify(parsed, null, 2);
+    } catch (e) {
+        alert('Некорректный синтаксис JSON: ' + e.message);
+    }
+}
+
+function confirmLaunch() {
+    const scope = document.querySelector('input[name="target_type"]:checked').value;
+    const extraVarsRaw = document.getElementById('extra-vars-input').value.trim();
+
+    if (extraVarsRaw) {
+        try {
+            JSON.parse(extraVarsRaw);
+        } catch (e) {
+            alert('Ошибка в JSON параметрах (Extra Vars): ' + e.message);
+            document.getElementById('extra-vars-input').focus();
+            return false;
+        }
+    }
+
+    if (scope === 'preselected') {
+        const count = document.querySelectorAll('.host-checkbox:checked').length;
+        if (count === 0) {
+            alert('Пожалуйста, выберите хотя бы один сервер в списке!');
+            return false;
+        }
+        return confirm(`Запустить плейбук «{{ filename }}» на ${count} выбранных серверах?`);
+    } else if (scope === 'group') {
+        const select = document.querySelector('select[name="group_id"]');
+        const groupName = select.options[select.selectedIndex].text;
+        return confirm(`Запустить плейбук «{{ filename }}» на всех серверах группы:\n${groupName}?`);
+    } else {
+        return confirm(`ВНИМАНИЕ! Вы запускаете плейбук «{{ filename }}» на ВСЕХ серверах инфраструктуры.\n\nПродолжить?`);
+    }
+}
+</script>
+{% endblock %}

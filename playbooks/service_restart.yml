@@ -1,0 +1,32 @@
+---
+- name: Manage Systemd / Init Service
+  hosts: all
+  gather_facts: false
+  become: true
+
+  tasks:
+    - name: Ensure target service name is specified
+      ansible.builtin.assert:
+        that:
+          - target_service is defined
+          - target_service | trim | length > 0
+        fail_msg: "Параметр 'target_service' не указан! Укажите имя сервиса (например: nginx, sshd, docker)."
+
+    - name: Manage service state
+      ansible.builtin.service:
+        name: "{{ target_service }}"
+        state: "{{ service_state | default('restarted') }}"
+      register: service_manage_res
+
+    - name: Verify service active state
+      ansible.builtin.raw: systemctl is-active {{ target_service }} || service {{ target_service }} status
+      register: service_status_res
+      changed_when: false
+      failed_when: false
+
+    - name: Service status output
+      ansible.builtin.debug:
+        msg: >-
+          Сервис '{{ target_service }}' на {{ inventory_hostname }}:
+          Действие: {{ service_state | default('restarted') }}.
+          Текущий статус: {{ service_status_res.stdout | trim }}.
