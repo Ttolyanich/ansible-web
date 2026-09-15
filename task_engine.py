@@ -264,15 +264,38 @@ def normalize_private_key(raw_key: Optional[str]) -> str:
     Cleans up private key formatting:
     - Normalizes CRLF and CR to standard Unix LF (\n)
     - Removes trailing spaces on each line
+    - Preserves necessary blank lines (e.g. between PEM headers like DEK-Info/Proc-Type and payload)
     - Ensures exactly one newline at the end
     """
     if not raw_key:
         return ""
     normalized = raw_key.replace("\r\n", "\n").replace("\r", "\n").strip()
-    clean_lines = [line.strip() for line in normalized.split("\n") if line.strip()]
-    if not clean_lines:
-        return ""
-    return "\n".join(clean_lines) + "\n"
+    lines = normalized.split("\n")
+    clean_lines = []
+    prev_blank = False
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if not prev_blank:
+                clean_lines.append("")
+                prev_blank = True
+        else:
+            clean_lines.append(stripped)
+            prev_blank = False
+
+    result = "\n".join(clean_lines).strip()
+
+    # In PEM encrypted keys (RFC 1421), an empty line is mandatory after headers (DEK-Info / Proc-Type)
+    if "DEK-Info:" in result and "\n\n" not in result:
+        parts = result.split("\n")
+        fixed_parts = []
+        for p in parts:
+            fixed_parts.append(p)
+            if p.startswith("DEK-Info:"):
+                fixed_parts.append("")
+        result = "\n".join(fixed_parts)
+
+    return result + "\n"
 
 
 _key_validation_cache: Dict[Tuple[str, str], Tuple[bool, str]] = {}
