@@ -1161,8 +1161,7 @@ def create_credential():
     if private_key:
         is_valid, err_msg = validate_ssh_key(private_key, passphrase)
         if not is_valid:
-            flash(f"Ошибка в SSH-ключе: {err_msg}", "danger")
-            return redirect(url_for("credentials_view"))
+            flash(f"Внимание по SSH-ключу: {err_msg}", "warning")
 
     if is_default:
         # Reset existing defaults for this OS
@@ -1218,13 +1217,11 @@ def edit_credential(profile_id):
         eff_passphrase = passphrase if passphrase else (profile.passphrase or "")
         is_valid, err_msg = validate_ssh_key(private_key, eff_passphrase)
         if not is_valid:
-            flash(f"Ошибка в SSH-ключе: {err_msg}", "danger")
-            return redirect(url_for("credentials_view"))
+            flash(f"Внимание по SSH-ключу: {err_msg}", "warning")
     elif not clear_key and passphrase and profile.private_key:
         is_valid, err_msg = validate_ssh_key(profile.private_key, passphrase)
         if not is_valid:
-            flash(f"Ошибка в парольной фразе: {err_msg}", "danger")
-            return redirect(url_for("credentials_view"))
+            flash(f"Внимание по парольной фразе: {err_msg}", "warning")
 
     if name:
         profile.name = name

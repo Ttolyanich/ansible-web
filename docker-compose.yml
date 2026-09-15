@@ -12,7 +12,7 @@ services:
       - ANSIBLE_FORKS=${ANSIBLE_FORKS:-100}
       - ANSIBLE_TIMEOUT=${ANSIBLE_TIMEOUT:-15}
       - OPENSSL_CONF=/app/openssl_legacy.cnf
-    command: ["gunicorn", "--bind", "0.0.0.0:5050", "--workers", "2", "--threads", "4", "--timeout", "120", "app:app"]
+    command: ["gunicorn", "--bind", "0.0.0.0:5050", "--workers", "2", "--threads", "4", "--timeout", "120", "--reload", "app:app"]
     volumes:
       - ./instance:/app/instance
       - ./playbooks:/app/playbooks
