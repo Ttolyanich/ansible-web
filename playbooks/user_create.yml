@@ -1,4 +1,4 @@
-﻿---
+---
 - name: Create Administrator Account on Linux & Windows
   hosts: all
   gather_facts: false
@@ -17,26 +17,52 @@
     # -------------------------------------------------------------
     - name: "[Linux] Ensure users exist with home directories"
       when: os_type | default('linux') == 'linux'
-      ansible.builtin.user:
-        name: "{{ item.username }}"
-        shell: /bin/bash
-        create_home: true
-        state: present
-      loop: "{{ effective_users }}"
-      register: linux_user_res
+      block:
+        - name: "[Linux] Ensure users exist with home directories (module)"
+          ansible.builtin.user:
+            name: "{{ item.username }}"
+            shell: /bin/bash
+            create_home: true
+            state: present
+          loop: "{{ effective_users }}"
+          register: linux_user_res
+      rescue:
+        - name: "[Linux Fallback] Ensure users exist via raw useradd/adduser"
+          ansible.builtin.raw: >
+            id "{{ item.username }}" >/dev/null 2>&1 ||
+            useradd -m -s /bin/bash "{{ item.username }}" 2>/dev/null ||
+            useradd -m "{{ item.username }}" 2>/dev/null ||
+            adduser -D -s /bin/bash "{{ item.username }}" 2>/dev/null ||
+            adduser -D "{{ item.username }}" 2>/dev/null
+          loop: "{{ effective_users }}"
+          register: linux_user_fallback_res
 
     - name: "[Linux] Setup SSH authorized_keys"
       when: 
         - os_type | default('linux') == 'linux'
         - item.ssh_key is defined
         - item.ssh_key | trim | length > 0
-      ansible.posix.authorized_key:
-        user: "{{ item.username }}"
-        key: "{{ item.ssh_key }}"
-        state: present
-        exclusive: false
-      loop: "{{ effective_users }}"
-      register: linux_key_res
+      block:
+        - name: "[Linux] Setup SSH authorized_keys (posix module)"
+          ansible.posix.authorized_key:
+            user: "{{ item.username }}"
+            key: "{{ item.ssh_key }}"
+            state: present
+            exclusive: false
+          loop: "{{ effective_users }}"
+          register: linux_key_res
+      rescue:
+        - name: "[Linux Fallback] Setup SSH authorized_keys via raw shell"
+          ansible.builtin.raw: >
+            bash -c 'USER_DIR=$(getent passwd "{{ item.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ item.username }}");
+            [ -z "$USER_DIR" ] && USER_DIR="/home/{{ item.username }}";
+            mkdir -p "$USER_DIR/.ssh" &&
+            chmod 700 "$USER_DIR/.ssh" &&
+            (grep -qxF "{{ item.ssh_key | trim }}" "$USER_DIR/.ssh/authorized_keys" 2>/dev/null || echo "{{ item.ssh_key | trim }}" >> "$USER_DIR/.ssh/authorized_keys") &&
+            chmod 600 "$USER_DIR/.ssh/authorized_keys" &&
+            chown -R "{{ item.username }}" "$USER_DIR/.ssh"'
+          loop: "{{ effective_users }}"
+          register: linux_key_fallback_res
 
     - name: "[Linux] Check if sudo is installed"
       when: 
@@ -61,28 +87,45 @@
       changed_when: sudo_install_res.rc == 0
       failed_when: false
 
-    - name: "[Linux] Ensure /etc/sudoers.d directory exists"
+    - name: "[Linux] Configure sudoers permissions"
       when: 
         - os_type | default('linux') == 'linux'
         - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
-      ansible.builtin.file:
-        path: /etc/sudoers.d
-        state: directory
-        mode: '0750'
-        owner: root
-        group: root
-      failed_when: false
+      block:
+        - name: "[Linux] Ensure /etc/sudoers.d directory exists"
+          ansible.builtin.file:
+            path: /etc/sudoers.d
+            state: directory
+            mode: '0750'
+            owner: root
+            group: root
+          failed_when: false
 
-    - name: "[Linux] Ensure /etc/sudoers includes /etc/sudoers.d"
-      when: 
-        - os_type | default('linux') == 'linux'
-        - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
-      ansible.builtin.lineinfile:
-        path: /etc/sudoers
-        line: "#includedir /etc/sudoers.d"
-        state: present
-        validate: 'visudo -cf %s'
-      failed_when: false
+        - name: "[Linux] Ensure /etc/sudoers includes /etc/sudoers.d"
+          ansible.builtin.lineinfile:
+            path: /etc/sudoers
+            line: "#includedir /etc/sudoers.d"
+            state: present
+            validate: 'visudo -cf %s'
+          failed_when: false
+
+        - name: "[Linux] Configure sudoers permissions (NOPASSWD drop-in file)"
+          ansible.builtin.copy:
+            dest: "/etc/sudoers.d/{{ item.username }}"
+            content: "{{ item.username }} ALL=(ALL) NOPASSWD: ALL\n"
+            mode: '0440'
+            validate: 'visudo -cf %s'
+          loop: "{{ effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list }}"
+          register: linux_sudo_res
+      rescue:
+        - name: "[Linux Fallback] Configure sudoers drop-in via raw shell"
+          ansible.builtin.raw: >
+            bash -c 'mkdir -p /etc/sudoers.d && chmod 750 /etc/sudoers.d &&
+            (grep -q "includedir /etc/sudoers.d" /etc/sudoers 2>/dev/null || echo "#includedir /etc/sudoers.d" >> /etc/sudoers);
+            echo "{{ item.username }} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/{{ item.username }}" &&
+            chmod 0440 "/etc/sudoers.d/{{ item.username }}"'
+          loop: "{{ effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list }}"
+          failed_when: false
 
     - name: "[Linux] Add user to sudo/wheel groups if present"
       when: 
@@ -93,18 +136,6 @@
       loop: "{{ effective_users }}"
       failed_when: false
       changed_when: false
-
-    - name: "[Linux] Configure sudoers permissions (NOPASSWD)"
-      when: 
-        - os_type | default('linux') == 'linux'
-        - item.sudo | default(true) | bool
-      ansible.builtin.copy:
-        dest: "/etc/sudoers.d/{{ item.username }}"
-        content: "{{ item.username }} ALL=(ALL) NOPASSWD: ALL\n"
-        mode: '0440'
-        validate: 'visudo -cf %s'
-      loop: "{{ effective_users }}"
-      register: linux_sudo_res
 
     # -------------------------------------------------------------
     # WINDOWS TARGETS (via OpenSSH)
