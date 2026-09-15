@@ -919,11 +919,18 @@ def dispatch_task(app, task_type: str, playbook_name: str, host_ids: List[int], 
     """Create TaskJob record and submit to thread pool."""
     from models import db, TaskJob, AuditLog
 
+    meta_info = {
+        "playbook_name": playbook_name,
+        "extra_vars": extra_vars,
+        "note": filter_info
+    }
+    stored_filter_info = json.dumps(meta_info, ensure_ascii=False)
+
     task = TaskJob(
         task_type=task_type,
         status="pending",
         summary=summary,
-        filter_info=filter_info,
+        filter_info=stored_filter_info,
         user_id=user_id,
         target_count=len(host_ids),
         created_at=datetime.utcnow()

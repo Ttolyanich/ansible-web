@@ -997,6 +997,125 @@ def cancel_task_view(task_id):
     return redirect(url_for("task_detail", task_id=task_id))
 
 
+def get_failed_hosts_for_task(task):
+    """Return list of Host objects that failed or were unreachable in this task."""
+    failed_names = set()
+    if task.details:
+        for name, res in task.details.items():
+            if isinstance(res, dict) and res.get("status") != "ok":
+                failed_names.add(name)
+
+    if not failed_names and task.log_output:
+        for line in task.log_output.splitlines():
+            m = re.match(r'^\s*([^\s:]+)\s*:\s*.*(?:unreachable=[1-9]|failed=[1-9])', line)
+            if m:
+                failed_names.add(m.group(1))
+            m_fatal = re.search(r'(?:fatal|unreachable):\s*\[([^\]]+)\]', line)
+            if m_fatal:
+                failed_names.add(m_fatal.group(1))
+
+    if not failed_names:
+        return []
+
+    return Host.query.filter(Host.name.in_(list(failed_names))).all()
+
+
+@app.route("/tasks/<int:task_id>/retry-failed", methods=["POST"])
+@login_required
+def task_retry_failed(task_id):
+    task = db.get_or_404(TaskJob, task_id)
+    failed_hosts = get_failed_hosts_for_task(task)
+    if not failed_hosts:
+        flash("Не удалось автоматически определить список хостов с ошибками.", "warning")
+        return redirect(url_for("task_detail", task_id=task.id))
+
+    host_ids = [h.id for h in failed_hosts]
+
+    playbook_name = "ping_check.yml"
+    extra_vars = {}
+    task_type = task.task_type
+
+    meta_parsed = {}
+    try:
+        if task.filter_info and task.filter_info.strip().startswith("{"):
+            meta_parsed = json.loads(task.filter_info)
+    except Exception:
+        pass
+
+    if meta_parsed.get("playbook_name"):
+        playbook_name = meta_parsed["playbook_name"]
+        extra_vars = meta_parsed.get("extra_vars", {})
+    elif task_type == "user_create":
+        playbook_name = "user_create.yml"
+        ansible_staff = StaffMember.query.filter_by(username="ansible").first()
+        target_users = []
+        if ansible_staff:
+            target_users.append({
+                "username": ansible_staff.username,
+                "name": ansible_staff.name,
+                "ssh_key": ansible_staff.ssh_public_key or "",
+                "password": ansible_staff.password or "",
+                "sudo": ansible_staff.sudo_enabled
+            })
+        extra_vars = {
+            "target_users": target_users,
+            "target_username": target_users[0]["username"] if target_users else "ansible",
+            "target_ssh_key": target_users[0]["ssh_key"] if target_users else "",
+            "target_password": target_users[0]["password"] if target_users else "",
+            "target_sudo": target_users[0]["sudo"] if target_users else True
+        }
+    elif task_type == "user_delete":
+        playbook_name = "user_delete.yml"
+        extra_vars = {"target_users": [{"username": "ansible"}]}
+    elif task_type == "ping":
+        playbook_name = "ping_check.yml"
+    elif task_type == "playbook_run":
+        m = re.search(r'\(([^)]+\.(?:yml|yaml))\)', task.summary or "")
+        playbook_name = m.group(1) if m else "system_update.yml"
+
+    new_task_id = dispatch_task(
+        app=app,
+        task_type=task_type,
+        playbook_name=playbook_name,
+        host_ids=host_ids,
+        extra_vars=extra_vars,
+        user_id=current_user.id,
+        summary=f"[ПОВТОР ОШИБОК #{task.id}] {task.summary}",
+        filter_info=f"Повтор для {len(host_ids)} ошибочных серверов из задачи #{task.id}"
+    )
+
+    flash(f"Запущен повтор задачи на {len(host_ids)} хостах с ошибками!", "success")
+    return redirect(url_for("task_detail", task_id=new_task_id))
+
+
+@app.route("/tasks/<int:task_id>/open-failed-in-user-ops", methods=["POST"])
+@login_required
+def task_open_failed_in_user_ops(task_id):
+    task = db.get_or_404(TaskJob, task_id)
+    failed_hosts = get_failed_hosts_for_task(task)
+    if not failed_hosts:
+        flash("Не найдено хостов с ошибками.", "warning")
+        return redirect(url_for("task_detail", task_id=task.id))
+
+    selected_host_ids = [str(h.id) for h in failed_hosts]
+    groups = HostGroup.query.order_by(HostGroup.name).all()
+    all_hosts_count = Host.query.filter_by(is_enabled=True).count()
+    staff_members = StaffMember.query.filter_by(is_active=True).order_by(StaffMember.name).all()
+    ansible_staff = StaffMember.query.filter_by(username="ansible").first()
+    selected_staff_ids = [str(ansible_staff.id)] if ansible_staff else []
+
+    return render_template(
+        "user_ops.html",
+        groups=groups,
+        all_hosts_count=all_hosts_count,
+        selected_host_ids=selected_host_ids,
+        selected_group_id="",
+        staff_members=staff_members,
+        selected_staff_ids=selected_staff_ids
+    )
+
+
+
 
 # -------------------------------------------------------------
 # SSH Credential Profiles (Admin only)
