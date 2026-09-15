@@ -118,8 +118,20 @@
                                 </a>
                                 <span class="text-[10px] text-slate-500 font-mono block">ID: {{ host.zabbix_hostid }}</span>
                             </td>
-                            <td class="py-3 px-4 font-mono text-xs text-slate-300">{{ host.ip_address }}</td>
-                            <td class="py-3 px-4">
+                            <td class="py-3 px-4 font-mono text-xs text-slate-300">
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span>{{ host.ip_address }}</span>
+                                    {% if host.ip_source == 'vpn_comment' %}
+                                        <span class="text-[10px] font-sans font-medium px-1.5 py-0.5 rounded bg-blue-950/80 text-blue-300 border border-blue-800" title="VPN-адрес из описания Zabbix (Agent IP: {{ host.zabbix_agent_ip }})">
+                                            VPN
+                                        </span>
+                                    {% elif host.ip_source == 'manual' or host.is_ip_manually_set %}
+                                        <span class="text-[10px] font-sans font-medium px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800" title="Задан вручную, защищен от перезаписи">
+                                            Ручной
+                                        </span>
+                                    {% endif %}
+                                </div>
+                            </td>
                                 {% if host.os_type == 'linux' %}
                                     <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800">
                                         <i class="fa-brands fa-linux"></i> Linux

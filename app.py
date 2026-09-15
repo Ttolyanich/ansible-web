@@ -173,7 +173,29 @@ def host_detail(host_id):
     credential_profiles = CredentialProfile.query.order_by(CredentialProfile.name).all()
 
     if request.method == "POST":
-        host.ip_address = request.form.get("ip_address", host.ip_address).strip()
+        action = request.form.get("action", "save")
+        
+        if action == "reset_ip":
+            # Revert to automatic IP (VPN from comment if present, else original Zabbix agent IP)
+            host.is_ip_manually_set = False
+            from zabbix_client import extract_vpn_ip_from_comment
+            vpn_ip = extract_vpn_ip_from_comment(host.zabbix_description)
+            if vpn_ip:
+                host.ip_address = vpn_ip
+                host.ip_source = "vpn_comment"
+            elif host.zabbix_agent_ip:
+                host.ip_address = host.zabbix_agent_ip
+                host.ip_source = "zabbix"
+            db.session.commit()
+            flash(f"IP-адрес хоста {host.name} сброшен на значение из Zabbix ({host.ip_address}).", "info")
+            return redirect(url_for("host_detail", host_id=host.id))
+
+        new_ip = request.form.get("ip_address", host.ip_address).strip()
+        if new_ip and new_ip != host.ip_address:
+            host.ip_address = new_ip
+            host.is_ip_manually_set = True
+            host.ip_source = "manual"
+
         host.os_type = request.form.get("os_type", host.os_type)
         cred_id = request.form.get("credential_id")
         host.credential_id = int(cred_id) if cred_id else None
@@ -628,6 +650,26 @@ def delete_panel_user(user_id):
 def bootstrap_database():
     with app.app_context():
         db.create_all()
+
+        # Schema auto-migration for SQLite to safely add newly added columns
+        try:
+            inspector = db.inspect(db.engine)
+            if "hosts" in inspector.get_table_names():
+                existing_cols = {col["name"] for col in inspector.get_columns("hosts")}
+                with db.engine.connect() as conn:
+                    if "is_ip_manually_set" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN is_ip_manually_set BOOLEAN DEFAULT 0"))
+                    if "ip_source" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN ip_source VARCHAR(30) DEFAULT 'zabbix'"))
+                    if "zabbix_agent_ip" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN zabbix_agent_ip VARCHAR(100) DEFAULT ''"))
+                    if "zabbix_description" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN zabbix_description TEXT DEFAULT ''"))
+                    if "proxy_hostid" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN proxy_hostid VARCHAR(50) DEFAULT '0'"))
+                    conn.commit()
+        except Exception as e:
+            print(f"[BOOTSTRAP] Migration notice: {e}")
 
         # 1. Create Default Admin if no users exist
         if User.query.count() == 0:

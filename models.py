@@ -165,6 +165,11 @@ class Host(db.Model):
     zabbix_hostid = db.Column(db.String(50), unique=True, nullable=False)
     name = db.Column(db.String(255), nullable=False)
     ip_address = db.Column(db.String(100), nullable=False)
+    is_ip_manually_set = db.Column(db.Boolean, default=False)
+    ip_source = db.Column(db.String(30), default="zabbix") # 'zabbix', 'vpn_comment', 'manual'
+    zabbix_agent_ip = db.Column(db.String(100), default="") # original interface IP from Zabbix
+    zabbix_description = db.Column(db.Text, default="") # host comment from Zabbix
+    proxy_hostid = db.Column(db.String(50), default="0") # Zabbix proxy ID if behind proxy
     os_type = db.Column(db.String(20), default="unknown") # 'linux', 'windows', 'unknown'
     zabbix_templates = db.Column(db.Text, default="")
     group_id = db.Column(db.Integer, db.ForeignKey("host_groups.id", ondelete="CASCADE"), nullable=True)

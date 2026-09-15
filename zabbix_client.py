@@ -1,10 +1,42 @@
 import json
 import logging
+import re
 import requests
 from typing import Dict, Any, Tuple, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+IPV4_REGEX = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
+EXPLICIT_VPN_PATTERN = re.compile(
+    r'(?:vpn|впн|ovpn|openvpn|wg|wireguard|туннель|tunnel|ip\s*vpn|vpn\s*ip|ip)[:=\s\-]*(' + IPV4_REGEX + r')',
+    re.IGNORECASE
+)
+
+def extract_vpn_ip_from_comment(comment: Optional[str]) -> Optional[str]:
+    """
+    Extracts a VPN IPv4 address from Zabbix host comment (description).
+    Checks explicit keywords first ('VPN: 10.x.x.x', 'впн 10.x.x.x', etc.),
+    then checks if any valid IPv4 address is present in the comment.
+    Ignores loopback, broadcast, or zero IPs.
+    """
+    if not comment:
+        return None
+
+    # 1. Search with explicit prefixes
+    match = EXPLICIT_VPN_PATTERN.search(comment)
+    if match:
+        ip = match.group(1).strip()
+        if not ip.startswith(("127.", "0.", "255.")):
+            return ip
+
+    # 2. General search for any IPv4 address in comment
+    all_ips = re.findall(IPV4_REGEX, comment)
+    for ip in all_ips:
+        if not ip.startswith(("127.", "0.", "255.")):
+            return ip
+
+    return None
 
 class ZabbixAPIError(Exception):
     pass
@@ -73,7 +105,7 @@ class ZabbixClient:
 
         # 2. Fetch hosts (only enabled hosts: status=0)
         hosts_raw = self._call("host.get", {
-            "output": ["hostid", "host", "name", "status"],
+            "output": ["hostid", "host", "name", "status", "description", "proxy_hostid"],
             "filter": {"status": "0"},
             "selectInterfaces": ["ip", "dns", "useip", "main", "type"],
             "selectParentTemplates": ["templateid", "name"],
@@ -142,11 +174,15 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
     linux_count = 0
     windows_count = 0
     unknown_count = 0
+    vpn_count = 0
+    manual_ip_count = 0
 
     for h_data in hosts_raw:
         hid = str(h_data["hostid"])
         seen_hostids.add(hid)
         hname = h_data.get("name") or h_data.get("host")
+        description = (h_data.get("description") or "").strip()
+        proxy_hostid = str(h_data.get("proxy_hostid") or "0")
         
         # Pick IP address: look for main interface (main=1)
         interfaces = h_data.get("interfaces", [])
@@ -159,6 +195,11 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
                 ip = main_iface["dns"]
             else:
                 ip = main_iface.get("ip") or "127.0.0.1"
+
+        # Check for VPN IP in host description/comment
+        vpn_ip = extract_vpn_ip_from_comment(description)
+        effective_ip = vpn_ip if vpn_ip else ip
+        effective_source = "vpn_comment" if vpn_ip else "zabbix"
 
         # Templates & OS detection
         templates = h_data.get("parentTemplates", [])
@@ -183,7 +224,20 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
         if hid in existing_hosts:
             host = existing_hosts[hid]
             host.name = hname
-            host.ip_address = ip
+            host.zabbix_agent_ip = ip
+            host.zabbix_description = description
+            host.proxy_hostid = proxy_hostid
+
+            # Only overwrite IP if it was NOT manually set by user
+            if host.is_ip_manually_set:
+                manual_ip_count += 1
+                host.ip_source = "manual"
+            else:
+                host.ip_address = effective_ip
+                host.ip_source = effective_source
+                if vpn_ip:
+                    vpn_count += 1
+
             # Keep manual override if set, otherwise update detected OS
             if host.os_type in ("unknown", None) or os_type != "unknown":
                 host.os_type = os_type
@@ -192,10 +246,17 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
                 host.group_id = primary_group_id
             host.is_enabled = True
         else:
+            if vpn_ip:
+                vpn_count += 1
             host = Host(
                 zabbix_hostid=hid,
                 name=hname,
-                ip_address=ip,
+                ip_address=effective_ip,
+                is_ip_manually_set=False,
+                ip_source=effective_source,
+                zabbix_agent_ip=ip,
+                zabbix_description=description,
+                proxy_hostid=proxy_hostid,
                 os_type=os_type,
                 zabbix_templates=", ".join(template_names),
                 group_id=primary_group_id,
@@ -212,7 +273,13 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
     # Update ZabbixSetting status
     now = datetime.utcnow()
     total_hosts = len(seen_hostids)
-    msg = f"Синхронизировано групп: {len(zabbix_group_map)}, хостов: {total_hosts} (Linux: {linux_count}, Windows: {windows_count}, Прочие: {unknown_count})"
+    extra_details = []
+    if vpn_count > 0:
+        extra_details.append(f"VPN из описания: {vpn_count}")
+    if manual_ip_count > 0:
+        extra_details.append(f"Ручных IP: {manual_ip_count}")
+    extra_str = f" | {', '.join(extra_details)}" if extra_details else ""
+    msg = f"Синхронизировано групп: {len(zabbix_group_map)}, хостов: {total_hosts} (Linux: {linux_count}, Windows: {windows_count}, Прочие: {unknown_count}{extra_str})"
     
     zabbix_setting.last_sync_status = "success"
     zabbix_setting.last_sync_message = msg

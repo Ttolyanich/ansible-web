@@ -42,10 +42,38 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <!-- IP Address -->
                 <div>
-                    <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">IP-адрес подключения</label>
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider">IP-адрес подключения</label>
+                        {% if host.ip_source == 'manual' or host.is_ip_manually_set %}
+                            <span class="text-[11px] bg-amber-500/20 text-amber-400 border border-amber-500/40 px-2 py-0.5 rounded font-medium">
+                                <i class="fa-solid fa-lock text-[10px] mr-1"></i>Ручной (защищен от Zabbix)
+                            </span>
+                        {% elif host.ip_source == 'vpn_comment' %}
+                            <span class="text-[11px] bg-blue-500/20 text-blue-400 border border-blue-500/40 px-2 py-0.5 rounded font-medium">
+                                <i class="fa-solid fa-network-wired text-[10px] mr-1"></i>VPN из описания Zabbix
+                            </span>
+                        {% else %}
+                            <span class="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-medium">
+                                <i class="fa-solid fa-server text-[10px] mr-1"></i>Интерфейс Zabbix Agent
+                            </span>
+                        {% endif %}
+                    </div>
                     <input type="text" name="ip_address" value="{{ host.ip_address }}" required
                            class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm focus:ring-2 focus:ring-red-500">
-                    <p class="text-[11px] text-slate-500 mt-1">Используется Ansible для подключения по SSH</p>
+                    <div class="flex items-center justify-between mt-2 text-[11px] text-slate-400">
+                        <span>
+                            {% if host.zabbix_agent_ip and host.zabbix_agent_ip != host.ip_address %}
+                                Исходный IP в Zabbix: <strong class="text-slate-300 font-mono">{{ host.zabbix_agent_ip }}</strong>
+                            {% else %}
+                                Используется Ansible для подключения по SSH
+                            {% endif %}
+                        </span>
+                        {% if host.is_ip_manually_set %}
+                            <button type="submit" name="action" value="reset_ip" class="text-xs text-amber-400 hover:text-amber-300 underline inline-flex items-center gap-1 transition">
+                                <i class="fa-solid fa-rotate-left"></i> Сбросить на IP из Zabbix
+                            </button>
+                        {% endif %}
+                    </div>
                 </div>
 
                 <!-- OS Type -->
@@ -74,10 +102,24 @@
                 </div>
             </div>
 
-            <!-- Zabbix Templates (Read-only) -->
-            <div class="bg-slate-950 border border-slate-800 p-4 rounded-lg">
-                <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Шаблоны Zabbix</div>
-                <div class="text-xs text-slate-300 font-mono break-words">{{ host.zabbix_templates or 'Нет шаблонов' }}</div>
+            <!-- Zabbix Information (Read-only) -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="bg-slate-950 border border-slate-800 p-4 rounded-lg">
+                    <div class="flex items-center justify-between mb-1">
+                        <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Комментарий из Zabbix</span>
+                        {% if host.proxy_hostid and host.proxy_hostid != '0' %}
+                        <span class="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded font-medium">
+                            Proxy ID: {{ host.proxy_hostid }}
+                        </span>
+                        {% endif %}
+                    </div>
+                    <div class="text-xs text-slate-300 font-mono whitespace-pre-wrap break-words">{{ host.zabbix_description or 'Комментарий отсутствует' }}</div>
+                </div>
+
+                <div class="bg-slate-950 border border-slate-800 p-4 rounded-lg">
+                    <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Шаблоны Zabbix</div>
+                    <div class="text-xs text-slate-300 font-mono break-words">{{ host.zabbix_templates or 'Нет шаблонов' }}</div>
+                </div>
             </div>
 
             <div class="flex justify-end pt-4 border-t border-slate-800">

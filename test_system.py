@@ -151,6 +151,42 @@ def test_candidate_credentials_fallback():
         db.session.delete(p_itsgsrv)
         db.session.commit()
 
+def test_vpn_extraction_and_manual_override():
+    print("\n--- 6. Testing VPN IP Extraction from Comments & Manual Override ---")
+    from zabbix_client import extract_vpn_ip_from_comment
+    from app import app, db
+    from models import Host
+
+    # Test parser
+    assert extract_vpn_ip_from_comment("VPN: 10.20.8.179") == "10.20.8.179"
+    assert extract_vpn_ip_from_comment("Хост за прокси. впн: 10.200.1.5") == "10.200.1.5"
+    assert extract_vpn_ip_from_comment("10.20.8.192") == "10.20.8.192"
+    assert extract_vpn_ip_from_comment("WireGuard 10.10.0.44") == "10.10.0.44"
+    assert extract_vpn_ip_from_comment("IP VPN: 172.16.20.5") == "172.16.20.5"
+    assert extract_vpn_ip_from_comment("127.0.0.1") is None
+    assert extract_vpn_ip_from_comment("Комментарий без IP") is None
+    print("  [OK] extract_vpn_ip_from_comment regex tests passed.")
+
+    with app.app_context():
+        h = Host.query.filter_by(zabbix_hostid="test-host-vpn").first()
+        if not h:
+            h = Host(
+                zabbix_hostid="test-host-vpn",
+                name="test-vpn-srv",
+                ip_address="10.20.8.179",
+                is_ip_manually_set=True,
+                ip_source="manual",
+                zabbix_agent_ip="192.168.1.50"
+            )
+            db.session.add(h)
+            db.session.commit()
+
+        assert h.is_ip_manually_set is True
+        assert h.ip_source == "manual"
+        db.session.delete(h)
+        db.session.commit()
+        print("  [OK] Host manual override fields verified.")
+
 if __name__ == "__main__":
     try:
         test_syntax()
@@ -158,6 +194,7 @@ if __name__ == "__main__":
         test_database_and_bootstrap()
         test_inventory_generation()
         test_candidate_credentials_fallback()
+        test_vpn_extraction_and_manual_override()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")
