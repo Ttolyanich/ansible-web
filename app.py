@@ -530,16 +530,21 @@ def edit_credential(profile_id):
     profile.ssh_port = ssh_port
     profile.become_method = become_method
 
-    if private_key:
+    clear_key = request.form.get("clear_key") == "1"
+    if clear_key:
+        profile.encrypted_private_key = None
+        profile.encrypted_passphrase = None
+        profile.auth_type = "password"
+    elif private_key:
         profile.private_key = private_key
         profile.auth_type = "key"
 
-    if passphrase:
+    if passphrase and not clear_key:
         profile.passphrase = passphrase
 
     if password:
         profile.password = password
-        if not private_key and not profile.private_key:
+        if clear_key or (not private_key and not profile.private_key):
             profile.auth_type = "password"
 
     if sudo_password:
