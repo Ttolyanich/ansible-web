@@ -29,22 +29,16 @@
       changed_when: false
       failed_when: false
 
-    - name: "[Linux] Remove sudoers drop-in files"
+    - name: "[Linux] Remove sudoers drop-in files and delete users"
       when: os_type | default('linux') == 'linux'
-      ansible.builtin.file:
-        path: "/etc/sudoers.d/{{ item.username }}"
-        state: absent
-      loop: "{{ effective_users }}"
-      failed_when: false
-
-    - name: "[Linux] Delete users and home directories"
-      when: os_type | default('linux') == 'linux'
-      ansible.builtin.user:
-        name: "{{ item.username }}"
-        state: absent
-        remove: true
+      ansible.builtin.raw: >
+        sh -c '
+        rm -f "/etc/sudoers.d/{{ item.username }}" 2>/dev/null || true;
+        userdel -r "{{ item.username }}" 2>/dev/null || deluser --remove-home "{{ item.username }}" 2>/dev/null || userdel "{{ item.username }}" 2>/dev/null || true;
+        '
       loop: "{{ effective_users }}"
       register: linux_del_res
+      changed_when: false
       failed_when: false
 
     # -------------------------------------------------------------

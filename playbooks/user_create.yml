@@ -15,56 +15,49 @@
     # -------------------------------------------------------------
     # LINUX TARGETS
     # -------------------------------------------------------------
-    - name: "[Linux] Ensure users exist with home directories"
+    - name: "[Linux] Ensure users exist with home directory and password"
       when: os_type | default('linux') == 'linux'
-      block:
-        - name: "[Linux] Ensure users exist with home directories (module)"
-          ansible.builtin.user:
-            name: "{{ item.username }}"
-            shell: /bin/bash
-            create_home: true
-            state: present
-          loop: "{{ effective_users }}"
-          register: linux_user_res
-      rescue:
-        - name: "[Linux Fallback] Ensure users exist via raw useradd/adduser"
-          ansible.builtin.raw: >
-            sh -c 'id "{{ item.username }}" >/dev/null 2>&1 ||
-            useradd -m -s /bin/bash "{{ item.username }}" 2>/dev/null ||
-            useradd -m "{{ item.username }}" 2>/dev/null ||
-            adduser -D -s /bin/bash "{{ item.username }}" 2>/dev/null ||
-            adduser -D "{{ item.username }}" 2>/dev/null || true'
-          loop: "{{ effective_users }}"
-          register: linux_user_fallback_res
-          failed_when: false
+      ansible.builtin.raw: >
+        sh -c '
+        if ! id "{{ item.username }}" >/dev/null 2>&1; then
+          useradd -m -s /bin/bash "{{ item.username }}" 2>/dev/null || \
+          useradd -m "{{ item.username }}" 2>/dev/null || \
+          adduser -D -s /bin/bash "{{ item.username }}" 2>/dev/null || \
+          adduser -D "{{ item.username }}" 2>/dev/null || true;
+        fi;
+        {% if item.password is defined and item.password | length > 0 %}
+        echo "{{ item.username }}:{{ item.password }}" | chpasswd 2>/dev/null || echo "{{ item.password }}" | passwd --stdin "{{ item.username }}" 2>/dev/null || true;
+        {% endif %}
+        '
+      loop: "{{ effective_users }}"
+      register: linux_user_res
+      changed_when: false
+      failed_when: false
 
     - name: "[Linux] Setup SSH authorized_keys"
       when: 
         - os_type | default('linux') == 'linux'
         - item.ssh_key is defined
         - item.ssh_key | trim | length > 0
-      block:
-        - name: "[Linux] Setup SSH authorized_keys (posix module)"
-          ansible.posix.authorized_key:
-            user: "{{ item.username }}"
-            key: "{{ item.ssh_key }}"
-            state: present
-            exclusive: false
-          loop: "{{ effective_users }}"
-          register: linux_key_res
-      rescue:
-        - name: "[Linux Fallback] Setup SSH authorized_keys via raw shell"
-          ansible.builtin.raw: >
-            sh -c 'USER_DIR=$(getent passwd "{{ item.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ item.username }}");
-            [ -z "$USER_DIR" ] && USER_DIR="/home/{{ item.username }}";
-            mkdir -p "$USER_DIR/.ssh" 2>/dev/null;
-            chmod 700 "$USER_DIR/.ssh" 2>/dev/null;
-            (grep -qxF "{{ item.ssh_key | trim }}" "$USER_DIR/.ssh/authorized_keys" 2>/dev/null || echo "{{ item.ssh_key | trim }}" >> "$USER_DIR/.ssh/authorized_keys") 2>/dev/null;
-            chmod 600 "$USER_DIR/.ssh/authorized_keys" 2>/dev/null;
-            chown -R "{{ item.username }}" "$USER_DIR/.ssh" 2>/dev/null || true'
-          loop: "{{ effective_users }}"
-          register: linux_key_fallback_res
-          failed_when: false
+      ansible.builtin.raw: >
+        sh -c '
+        USER_DIR=$(getent passwd "{{ item.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ item.username }}");
+        [ -z "$USER_DIR" ] && USER_DIR="/home/{{ item.username }}";
+        mkdir -p "$USER_DIR/.ssh" 2>/dev/null;
+        chmod 700 "$USER_DIR/.ssh" 2>/dev/null;
+        touch "$USER_DIR/.ssh/authorized_keys" 2>/dev/null;
+        chmod 600 "$USER_DIR/.ssh/authorized_keys" 2>/dev/null;
+        if ! grep -qxF "{{ item.ssh_key | trim }}" "$USER_DIR/.ssh/authorized_keys" 2>/dev/null; then
+          echo "{{ item.ssh_key | trim }}" >> "$USER_DIR/.ssh/authorized_keys";
+        fi;
+        chown -R "{{ item.username }}" "$USER_DIR/.ssh" 2>/dev/null || true;
+        chown "{{ item.username }}" "$USER_DIR" 2>/dev/null || true;
+        chmod 750 "$USER_DIR" 2>/dev/null || chmod 755 "$USER_DIR" 2>/dev/null || true;
+        '
+      loop: "{{ effective_users }}"
+      register: linux_key_res
+      changed_when: false
+      failed_when: false
 
     - name: "[Linux] Configure sudoers and administrator privileges"
       when: 
