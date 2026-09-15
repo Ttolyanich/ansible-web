@@ -108,7 +108,8 @@ def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
 
     custom_port = getattr(host, "ssh_port", None)
 
-    def make_cred_dict(prof, auth_mode: str) -> Dict[str, Any]:
+    def make_cred_dict(prof, auth_mode: str, eff_pwd: str = "") -> Dict[str, Any]:
+        pwd = eff_pwd or (prof.password if prof else "") or (prof.passphrase if prof and not prof.password else "")
         return {
             "profile_id": prof.id if prof else None,
             "profile_name": prof.name if prof else "System Default",
@@ -117,29 +118,46 @@ def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
             "auth_type": auth_mode,
             "private_key": prof.private_key if prof else "",
             "passphrase": prof.passphrase if prof else "",
-            "password": prof.password if prof else "",
+            "password": pwd,
             "sudo_password": prof.sudo_password if prof else "",
             "become_method": (prof.become_method if prof else None) or ("sudo" if target_os == "linux" else "none")
         }
 
     for prof in profiles_to_try:
-        has_key = bool(prof.private_key and prof.private_key.strip())
-        has_pwd = bool(prof.password and prof.password.strip())
-        pref_auth = prof.auth_type or "key"
+        raw_key = (prof.private_key or "").strip() if prof else ""
+        raw_pass = (prof.password or "").strip() if prof else ""
+        raw_passphrase = (prof.passphrase or "").strip() if prof else ""
+
+        # Validate key format
+        key_valid = False
+        if raw_key:
+            key_valid, _ = validate_ssh_key(raw_key, raw_passphrase)
+
+        has_key = bool(raw_key and key_valid)
+
+        # If user entered server password into either password or passphrase field:
+        effective_pwd = raw_pass or raw_passphrase
+        has_pwd = bool(effective_pwd)
+
+        pref_auth = prof.auth_type or ("key" if has_key else "password")
+
+        # If key is broken/invalid but password/passphrase exists, prefer password!
+        if not has_key and raw_key and has_pwd:
+            pref_auth = "password"
 
         if pref_auth == "password":
             if has_pwd:
-                candidates.append(make_cred_dict(prof, "password"))
+                candidates.append(make_cred_dict(prof, "password", effective_pwd))
             if has_key:
-                candidates.append(make_cred_dict(prof, "key"))
+                candidates.append(make_cred_dict(prof, "key", effective_pwd))
         else:
             if has_key:
-                candidates.append(make_cred_dict(prof, "key"))
+                candidates.append(make_cred_dict(prof, "key", effective_pwd))
             if has_pwd:
-                candidates.append(make_cred_dict(prof, "password"))
+                candidates.append(make_cred_dict(prof, "password", effective_pwd))
 
         if not has_key and not has_pwd:
-            candidates.append(make_cred_dict(prof, pref_auth))
+            candidates.append(make_cred_dict(prof, pref_auth, ""))
 
     if not candidates:
         candidates.append({
@@ -296,6 +314,13 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> No
     except Exception as ex:
         logger.debug(f"Cryptography key export note: {ex}")
 
+    # If key could not be loaded by cryptography, validate it before writing
+    if not loaded_key:
+        is_val, _ = validate_ssh_key(clean_key, passphrase)
+        if not is_val:
+            logger.warning(f"Skipping writing invalid key to {target_file}")
+            return False
+
     # Write as pure Unix bytes (\n only) in binary mode
     with open(target_file, "wb") as f:
         f.write(final_content.encode("utf-8"))
@@ -304,6 +329,8 @@ def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> No
         os.chmod(target_file, 0o600)
     except Exception:
         pass
+
+    return True
 
 
 def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: Optional[Dict[str, dict]] = None, is_ping: bool = False) -> str:
@@ -351,21 +378,24 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
             host_vars["ansible_shell_type"] = "cmd"
 
         # Handle Private Key vs Password
-        if (creds.get("auth_type") == "key" and creds.get("private_key")) or creds.get("private_key"):
+        use_key = False
+        if creds.get("auth_type") == "key" and creds.get("private_key"):
             key_file = os.path.join(keys_dir, f"key_{host.id}_{abs(hash(creds['user'])) % 10000}")
-            write_clean_key_file(creds.get("private_key", ""), creds.get("passphrase", ""), key_file)
+            if write_clean_key_file(creds.get("private_key", ""), creds.get("passphrase", ""), key_file):
+                host_vars["ansible_ssh_private_key_file"] = key_file
+                host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes -o PubkeyAcceptedKeyTypes=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o PubkeyAcceptedAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519"
+                if creds.get("passphrase"):
+                    host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
+                use_key = True
 
-            host_vars["ansible_ssh_private_key_file"] = key_file
-            host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes -o PubkeyAcceptedKeyTypes=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o PubkeyAcceptedAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519"
-            if creds.get("passphrase"):
-                host_vars["ansible_ssh_passphrase"] = creds["passphrase"]
-
-        elif creds.get("auth_type") == "password" and creds.get("password"):
-            host_vars["ansible_password"] = creds["password"]
-            # No BatchMode=yes so sshpass can pass the password
-
-        elif creds.get("password"):
-            host_vars["ansible_password"] = creds["password"]
+        if not use_key:
+            if creds.get("password"):
+                host_vars["ansible_password"] = creds["password"]
+            elif creds.get("private_key"):
+                key_file = os.path.join(keys_dir, f"key_{host.id}_{abs(hash(creds['user'])) % 10000}")
+                if write_clean_key_file(creds.get("private_key", ""), creds.get("passphrase", ""), key_file):
+                    host_vars["ansible_ssh_private_key_file"] = key_file
+                    host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes"
 
         elif os.path.exists("/root/.ssh/id_rsa"):
             host_vars["ansible_ssh_private_key_file"] = "/root/.ssh/id_rsa"

@@ -280,8 +280,16 @@ def test_ssh_key_normalization_and_ping_escalation():
     from models import Host, HostGroup, CredentialProfile
     import tempfile
 
-    # 1. Test normalize_private_key
-    crlf_key = "-----BEGIN OPENSSH PRIVATE KEY-----\r\nb3BlbnNzaC1rZXktdjEAAAA\r\n-----END OPENSSH PRIVATE KEY-----\r\n"
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from cryptography.hazmat.primitives import serialization
+
+    # 1. Test normalize_private_key with real key
+    real_ed = ed25519.Ed25519PrivateKey.generate().private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.OpenSSH,
+        serialization.NoEncryption()
+    ).decode("utf-8")
+    crlf_key = real_ed.replace("\n", "\r\n")
     normalized = normalize_private_key(crlf_key)
     assert "\r" not in normalized, "Carriage returns must be stripped!"
     assert normalized.endswith("\n"), "Must end with newline"
