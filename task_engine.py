@@ -61,6 +61,9 @@ def resolve_credentials(host, db_session) -> Dict[str, Any]:
         creds["sudo_password"] = profile.sudo_password or ""
         creds["become_method"] = profile.become_method or creds["become_method"]
 
+    if getattr(host, "ssh_port", None):
+        creds["port"] = host.ssh_port
+
     return creds
 
 
@@ -103,12 +106,14 @@ def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
 
     candidates = []
 
+    custom_port = getattr(host, "ssh_port", None)
+
     def make_cred_dict(prof, auth_mode: str) -> Dict[str, Any]:
         return {
             "profile_id": prof.id if prof else None,
             "profile_name": prof.name if prof else "System Default",
             "user": (prof.ssh_user if prof else None) or ("root" if target_os == "linux" else "Administrator"),
-            "port": (prof.ssh_port if prof else None) or 22,
+            "port": custom_port or (prof.ssh_port if prof else None) or 22,
             "auth_type": auth_mode,
             "private_key": prof.private_key if prof else "",
             "passphrase": prof.passphrase if prof else "",
@@ -141,7 +146,7 @@ def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
             "profile_id": None,
             "profile_name": "Built-in Default",
             "user": "root" if target_os == "linux" else "Administrator",
-            "port": 22,
+            "port": custom_port or 22,
             "auth_type": "key",
             "private_key": "",
             "passphrase": "",
@@ -180,10 +185,11 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
             creds = resolve_credentials(host, db_session)
 
         target_os = host.os_type if host.os_type in ("linux", "windows") else "linux"
+        effective_port = getattr(host, "ssh_port", None) or creds.get("port") or 22
 
         host_vars = {
             "ansible_host": host.ip_address,
-            "ansible_port": creds["port"],
+            "ansible_port": effective_port,
             "ansible_user": creds["user"],
             "os_type": target_os,
             "ansible_ssh_common_args": "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -o ConnectionAttempts=1 -o ServerAliveInterval=3 -o ServerAliveCountMax=1 -o GSSAPIAuthentication=no -o TCPKeepAlive=yes"

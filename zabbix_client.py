@@ -12,6 +12,13 @@ EXPLICIT_VPN_PATTERN = re.compile(
     r'(?:vpn|впн|ovpn|openvpn|wg|wireguard|туннель|tunnel|ip\s*vpn|vpn\s*ip|ip)[:=\s\-]*(' + IPV4_REGEX + r')',
     re.IGNORECASE
 )
+IP_PORT_PATTERN = re.compile(
+    r'(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):([0-9]{2,5})\b'
+)
+EXPLICIT_PORT_PATTERN = re.compile(
+    r'(?:ssh[\s_-]*port|порт|port|ssh)[:=\s\-]+([0-9]{2,5})\b',
+    re.IGNORECASE
+)
 
 def extract_vpn_ip_from_comment(comment: Optional[str]) -> Optional[str]:
     """
@@ -35,6 +42,38 @@ def extract_vpn_ip_from_comment(comment: Optional[str]) -> Optional[str]:
     for ip in all_ips:
         if not ip.startswith(("127.", "0.", "255.")):
             return ip
+
+    return None
+
+
+def extract_port_from_comment(comment: Optional[str]) -> Optional[int]:
+    """
+    Extracts custom SSH port from Zabbix host comment (description).
+    Matches patterns like '10.20.8.179:2222', 'порт: 2222', 'port 2222', 'ssh port: 2222'.
+    Validates port is within 1..65535. Returns int or None.
+    """
+    if not comment:
+        return None
+
+    # 1. IP:PORT pattern (e.g. 10.20.8.179:2222)
+    m = IP_PORT_PATTERN.search(comment)
+    if m:
+        try:
+            port = int(m.group(1))
+            if 1 <= port <= 65535:
+                return port
+        except ValueError:
+            pass
+
+    # 2. Explicit keywords: 'порт 2222', 'port: 2222', 'ssh port 2222'
+    m = EXPLICIT_PORT_PATTERN.search(comment)
+    if m:
+        try:
+            port = int(m.group(1))
+            if 1 <= port <= 65535:
+                return port
+        except ValueError:
+            pass
 
     return None
 
@@ -176,6 +215,7 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
     unknown_count = 0
     vpn_count = 0
     manual_ip_count = 0
+    custom_port_count = 0
 
     for h_data in hosts_raw:
         hid = str(h_data["hostid"])
@@ -196,8 +236,9 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
             else:
                 ip = main_iface.get("ip") or "127.0.0.1"
 
-        # Check for VPN IP in host description/comment
+        # Check for VPN IP and SSH port in host description/comment
         vpn_ip = extract_vpn_ip_from_comment(description)
+        vpn_port = extract_port_from_comment(description)
         effective_ip = vpn_ip if vpn_ip else ip
         effective_source = "vpn_comment" if vpn_ip else "zabbix"
 
@@ -238,6 +279,13 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
                 if vpn_ip:
                     vpn_count += 1
 
+            # Update SSH port if detected in comment
+            if vpn_port:
+                host.ssh_port = vpn_port
+
+            if host.ssh_port and host.ssh_port != 22:
+                custom_port_count += 1
+
             # Keep manual override if set, otherwise update detected OS
             if host.os_type in ("unknown", None) or os_type != "unknown":
                 host.os_type = os_type
@@ -248,10 +296,13 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
         else:
             if vpn_ip:
                 vpn_count += 1
+            if vpn_port and vpn_port != 22:
+                custom_port_count += 1
             host = Host(
                 zabbix_hostid=hid,
                 name=hname,
                 ip_address=effective_ip,
+                ssh_port=vpn_port,
                 is_ip_manually_set=False,
                 ip_source=effective_source,
                 zabbix_agent_ip=ip,
@@ -278,6 +329,8 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
         extra_details.append(f"VPN из описания: {vpn_count}")
     if manual_ip_count > 0:
         extra_details.append(f"Ручных IP: {manual_ip_count}")
+    if custom_port_count > 0:
+        extra_details.append(f"Кастомных портов SSH: {custom_port_count}")
     extra_str = f" | {', '.join(extra_details)}" if extra_details else ""
     msg = f"Синхронизировано групп: {len(zabbix_group_map)}, хостов: {total_hosts} (Linux: {linux_count}, Windows: {windows_count}, Прочие: {unknown_count}{extra_str})"
     

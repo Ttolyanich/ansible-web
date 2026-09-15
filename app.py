@@ -176,10 +176,12 @@ def host_detail(host_id):
         action = request.form.get("action", "save")
         
         if action == "reset_ip":
-            # Revert to automatic IP (VPN from comment if present, else original Zabbix agent IP)
+            # Revert to automatic IP & Port (VPN from comment if present, else original Zabbix agent IP)
             host.is_ip_manually_set = False
-            from zabbix_client import extract_vpn_ip_from_comment
+            from zabbix_client import extract_vpn_ip_from_comment, extract_port_from_comment
             vpn_ip = extract_vpn_ip_from_comment(host.zabbix_description)
+            vpn_port = extract_port_from_comment(host.zabbix_description)
+            host.ssh_port = vpn_port
             if vpn_ip:
                 host.ip_address = vpn_ip
                 host.ip_source = "vpn_comment"
@@ -187,7 +189,8 @@ def host_detail(host_id):
                 host.ip_address = host.zabbix_agent_ip
                 host.ip_source = "zabbix"
             db.session.commit()
-            flash(f"IP-адрес хоста {host.name} сброшен на значение из Zabbix ({host.ip_address}).", "info")
+            port_str = f":{host.ssh_port}" if host.ssh_port else ""
+            flash(f"Параметры подключения хоста {host.name} сброшены на значения из Zabbix ({host.ip_address}{port_str}).", "info")
             return redirect(url_for("host_detail", host_id=host.id))
 
         new_ip = request.form.get("ip_address", host.ip_address).strip()
@@ -195,6 +198,13 @@ def host_detail(host_id):
             host.ip_address = new_ip
             host.is_ip_manually_set = True
             host.ip_source = "manual"
+
+        # SSH Port override
+        raw_port = request.form.get("ssh_port", "").strip()
+        if raw_port and raw_port.isdigit():
+            host.ssh_port = int(raw_port)
+        elif raw_port == "":
+            host.ssh_port = None
 
         host.os_type = request.form.get("os_type", host.os_type)
         cred_id = request.form.get("credential_id")
@@ -667,6 +677,8 @@ def bootstrap_database():
                         conn.execute(db.text("ALTER TABLE hosts ADD COLUMN zabbix_description TEXT DEFAULT ''"))
                     if "proxy_hostid" not in existing_cols:
                         conn.execute(db.text("ALTER TABLE hosts ADD COLUMN proxy_hostid VARCHAR(50) DEFAULT '0'"))
+                    if "ssh_port" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN ssh_port INTEGER DEFAULT NULL"))
                     conn.commit()
         except Exception as e:
             print(f"[BOOTSTRAP] Migration notice: {e}")

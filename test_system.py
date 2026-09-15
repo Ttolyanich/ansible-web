@@ -187,6 +187,54 @@ def test_vpn_extraction_and_manual_override():
         db.session.commit()
         print("  [OK] Host manual override fields verified.")
 
+def test_ssh_port_handling():
+    print("\n--- 7. Testing Custom SSH Port Parsing & Host Port Inheritance ---")
+    from zabbix_client import extract_port_from_comment
+    from app import app, db
+    from models import Host
+    from task_engine import resolve_credentials, get_candidate_credentials, generate_inventory
+    import tempfile
+    import shutil
+
+    # 1. Test port extraction from comments
+    assert extract_port_from_comment("10.20.8.179:2222") == 2222
+    assert extract_port_from_comment("Хост за NAT. порт 2202") == 2202
+    assert extract_port_from_comment("port: 22222") == 22222
+    assert extract_port_from_comment("ssh port 8022") == 8022
+    assert extract_port_from_comment("ssh: 2222") == 2222
+    assert extract_port_from_comment("порт: 99999") is None # Out of range > 65535
+    assert extract_port_from_comment("Обычный сервер без порта") is None
+    print("  [OK] extract_port_from_comment regex tests passed.")
+
+    # 2. Test port inheritance in inventory and credentials
+    with app.app_context():
+        h = Host(
+            zabbix_hostid="test-host-port-custom",
+            name="test-port-srv",
+            ip_address="10.20.8.180",
+            ssh_port=2222,
+            os_type="linux"
+        )
+        db.session.add(h)
+        db.session.commit()
+
+        creds = resolve_credentials(h, db.session)
+        assert creds["port"] == 2222, f"Expected port 2222 in resolved creds, got {creds.get('port')}"
+
+        cands = get_candidate_credentials(h, db.session)
+        assert all(c["port"] == 2222 for c in cands), "All candidate credentials must inherit custom host port 2222"
+
+        temp_dir = tempfile.mkdtemp()
+        inv_file = generate_inventory([h], temp_dir, db.session)
+        with open(inv_file, "r", encoding="utf-8") as f:
+            inv = yaml.safe_load(f)
+        assert inv["all"]["hosts"]["test-port-srv"]["ansible_port"] == 2222
+        shutil.rmtree(temp_dir)
+
+        db.session.delete(h)
+        db.session.commit()
+        print("  [OK] Host custom SSH port inheritance in credentials and inventory verified.")
+
 if __name__ == "__main__":
     try:
         test_syntax()
@@ -195,6 +243,7 @@ if __name__ == "__main__":
         test_inventory_generation()
         test_candidate_credentials_fallback()
         test_vpn_extraction_and_manual_override()
+        test_ssh_port_handling()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")

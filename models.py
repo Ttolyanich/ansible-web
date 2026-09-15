@@ -165,6 +165,7 @@ class Host(db.Model):
     zabbix_hostid = db.Column(db.String(50), unique=True, nullable=False)
     name = db.Column(db.String(255), nullable=False)
     ip_address = db.Column(db.String(100), nullable=False)
+    ssh_port = db.Column(db.Integer, nullable=True) # Custom SSH port override (e.g. 2222)
     is_ip_manually_set = db.Column(db.Boolean, default=False)
     ip_source = db.Column(db.String(30), default="zabbix") # 'zabbix', 'vpn_comment', 'manual'
     zabbix_agent_ip = db.Column(db.String(100), default="") # original interface IP from Zabbix

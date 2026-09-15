@@ -120,7 +120,7 @@
                             </td>
                             <td class="py-3 px-4 font-mono text-xs text-slate-300">
                                 <div class="flex items-center gap-1.5 flex-wrap">
-                                    <span>{{ host.ip_address }}</span>
+                                    <span>{{ host.ip_address }}{% if host.ssh_port and host.ssh_port != 22 %}<span class="text-amber-400 font-semibold">:{{ host.ssh_port }}</span>{% endif %}</span>
                                     {% if host.ip_source == 'vpn_comment' %}
                                         <span class="text-[10px] font-sans font-medium px-1.5 py-0.5 rounded bg-blue-950/80 text-blue-300 border border-blue-800" title="VPN-адрес из описания Zabbix (Agent IP: {{ host.zabbix_agent_ip }})">
                                             VPN
