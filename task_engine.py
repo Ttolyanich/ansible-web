@@ -518,7 +518,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
         pass_num = 1
         max_passes = 6
         forks = int(os.getenv("ANSIBLE_FORKS", "100"))
-        ssh_timeout = int(os.getenv("ANSIBLE_TIMEOUT", "5"))
+        ssh_timeout = int(os.getenv("ANSIBLE_TIMEOUT", "15"))
         playbook_timeout = int(os.getenv("ANSIBLE_TASK_TIMEOUT", "900"))
         ansible_cmd = shutil.which("ansible-playbook")
         playbook_path = os.path.join(os.path.dirname(__file__), "playbooks", playbook_name)
@@ -571,9 +571,9 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                     env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
                     env["ANSIBLE_RETRY_FILES_ENABLED"] = "False"
                     env["ANSIBLE_STDOUT_CALLBACK"] = "default"
-                    env["ANSIBLE_SSH_RETRIES"] = "0"
+                    env["ANSIBLE_SSH_RETRIES"] = "1"
                     env["ANSIBLE_TIMEOUT"] = str(ssh_timeout)
-                    env["ANSIBLE_TASK_TIMEOUT"] = "15"
+                    env["ANSIBLE_TASK_TIMEOUT"] = "30"
 
                     proc = subprocess.run(
                         cmd,
@@ -622,15 +622,15 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                     else:
                         # Host failed this pass
                         err_text = (res.get("error") or res.get("summary") or "").lower()
-                        is_auth_error = any(kw in err_text for kw in [
-                            "permission denied", "authentication failed", "error in libcrypto",
-                            "auth fail", "password", "publickey"
+                        # Only stop trying if host is definitely dead (no route or closed port)
+                        is_dead_host = any(kw in err_text for kw in [
+                            "no route to host", "connection refused", "name or service not known"
                         ])
 
                         cands = host_candidates[h.name]
                         next_idx = host_attempt_indices[h.name] + 1
 
-                        if is_auth_error and next_idx < len(cands):
+                        if not is_dead_host and next_idx < len(cands):
                             # Move to next candidate in next pass!
                             host_attempt_indices[h.name] = next_idx
                             next_cand = cands[next_idx]
@@ -638,7 +638,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                                 f"[ПОДБОР] Хост '{h.name}': отказ авторизации под '{used_cred['profile_name']}' ({used_cred['user']}, {used_cred['auth_type']}). Следующая попытка: '{next_cand['profile_name']}' ({next_cand['user']}, {next_cand['auth_type']})...\n"
                             )
                         else:
-                            # Unreachable / network timeout OR all candidate profiles exhausted
+                            # Dead host OR all candidate profiles exhausted
                             final_results[h.name] = res
                             if h.name in pending_hosts:
                                 del pending_hosts[h.name]
