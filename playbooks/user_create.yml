@@ -29,13 +29,14 @@
       rescue:
         - name: "[Linux Fallback] Ensure users exist via raw useradd/adduser"
           ansible.builtin.raw: >
-            id "{{ item.username }}" >/dev/null 2>&1 ||
+            sh -c 'id "{{ item.username }}" >/dev/null 2>&1 ||
             useradd -m -s /bin/bash "{{ item.username }}" 2>/dev/null ||
             useradd -m "{{ item.username }}" 2>/dev/null ||
             adduser -D -s /bin/bash "{{ item.username }}" 2>/dev/null ||
-            adduser -D "{{ item.username }}" 2>/dev/null
+            adduser -D "{{ item.username }}" 2>/dev/null || true'
           loop: "{{ effective_users }}"
           register: linux_user_fallback_res
+          failed_when: false
 
     - name: "[Linux] Setup SSH authorized_keys"
       when: 
@@ -54,86 +55,34 @@
       rescue:
         - name: "[Linux Fallback] Setup SSH authorized_keys via raw shell"
           ansible.builtin.raw: >
-            bash -c 'USER_DIR=$(getent passwd "{{ item.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ item.username }}");
+            sh -c 'USER_DIR=$(getent passwd "{{ item.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ item.username }}");
             [ -z "$USER_DIR" ] && USER_DIR="/home/{{ item.username }}";
-            mkdir -p "$USER_DIR/.ssh" &&
-            chmod 700 "$USER_DIR/.ssh" &&
-            (grep -qxF "{{ item.ssh_key | trim }}" "$USER_DIR/.ssh/authorized_keys" 2>/dev/null || echo "{{ item.ssh_key | trim }}" >> "$USER_DIR/.ssh/authorized_keys") &&
-            chmod 600 "$USER_DIR/.ssh/authorized_keys" &&
-            chown -R "{{ item.username }}" "$USER_DIR/.ssh"'
+            mkdir -p "$USER_DIR/.ssh" 2>/dev/null;
+            chmod 700 "$USER_DIR/.ssh" 2>/dev/null;
+            (grep -qxF "{{ item.ssh_key | trim }}" "$USER_DIR/.ssh/authorized_keys" 2>/dev/null || echo "{{ item.ssh_key | trim }}" >> "$USER_DIR/.ssh/authorized_keys") 2>/dev/null;
+            chmod 600 "$USER_DIR/.ssh/authorized_keys" 2>/dev/null;
+            chown -R "{{ item.username }}" "$USER_DIR/.ssh" 2>/dev/null || true'
           loop: "{{ effective_users }}"
           register: linux_key_fallback_res
+          failed_when: false
 
-    - name: "[Linux] Check if sudo is installed"
+    - name: "[Linux] Configure sudoers and administrator privileges"
       when: 
         - os_type | default('linux') == 'linux'
         - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
-      ansible.builtin.raw: which sudo || command -v sudo
-      register: sudo_check
-      failed_when: false
-      changed_when: false
-
-    - name: "[Linux] Install sudo package if missing (Debian / Ubuntu / CentOS / RHEL / Alpine)"
-      when: 
-        - os_type | default('linux') == 'linux'
-        - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
-        - sudo_check.rc is defined and sudo_check.rc != 0
       ansible.builtin.raw: >
-        (command -v apt-get >/dev/null 2>&1 && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo) ||
-        (command -v yum >/dev/null 2>&1 && yum install -y sudo) ||
-        (command -v dnf >/dev/null 2>&1 && dnf install -y sudo) ||
-        (command -v apk >/dev/null 2>&1 && apk add sudo)
-      register: sudo_install_res
-      changed_when: sudo_install_res.rc == 0
-      failed_when: false
-
-    - name: "[Linux] Configure sudoers permissions"
-      when: 
-        - os_type | default('linux') == 'linux'
-        - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
-      block:
-        - name: "[Linux] Ensure /etc/sudoers.d directory exists"
-          ansible.builtin.file:
-            path: /etc/sudoers.d
-            state: directory
-            mode: '0750'
-            owner: root
-            group: root
-          failed_when: false
-
-        - name: "[Linux] Ensure /etc/sudoers includes /etc/sudoers.d"
-          ansible.builtin.lineinfile:
-            path: /etc/sudoers
-            line: "#includedir /etc/sudoers.d"
-            state: present
-            validate: 'visudo -cf %s'
-          failed_when: false
-
-        - name: "[Linux] Configure sudoers permissions (NOPASSWD drop-in file)"
-          ansible.builtin.copy:
-            dest: "/etc/sudoers.d/{{ item.username }}"
-            content: "{{ item.username }} ALL=(ALL) NOPASSWD: ALL\n"
-            mode: '0440'
-            validate: 'visudo -cf %s'
-          loop: "{{ effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list }}"
-          register: linux_sudo_res
-      rescue:
-        - name: "[Linux Fallback] Configure sudoers drop-in via raw shell"
-          ansible.builtin.raw: >
-            bash -c 'mkdir -p /etc/sudoers.d && chmod 750 /etc/sudoers.d &&
-            (grep -q "includedir /etc/sudoers.d" /etc/sudoers 2>/dev/null || echo "#includedir /etc/sudoers.d" >> /etc/sudoers);
-            echo "{{ item.username }} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/{{ item.username }}" &&
-            chmod 0440 "/etc/sudoers.d/{{ item.username }}"'
-          loop: "{{ effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list }}"
-          failed_when: false
-
-    - name: "[Linux] Add user to sudo/wheel groups if present"
-      when: 
-        - os_type | default('linux') == 'linux'
-        - item.sudo | default(true) | bool
-      ansible.builtin.raw: >
-        usermod -a -G sudo {{ item.username }} 2>/dev/null || usermod -a -G wheel {{ item.username }} 2>/dev/null || true
-      loop: "{{ effective_users }}"
+        sh -c '
+        command -v sudo >/dev/null 2>&1 || ( (command -v apt-get >/dev/null 2>&1 && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo) || (command -v yum >/dev/null 2>&1 && yum install -y sudo) || (command -v dnf >/dev/null 2>&1 && dnf install -y sudo) || (command -v apk >/dev/null 2>&1 && apk add sudo) );
+        mkdir -p /etc/sudoers.d 2>/dev/null && chmod 750 /etc/sudoers.d 2>/dev/null;
+        grep -q "includedir /etc/sudoers.d" /etc/sudoers 2>/dev/null || echo "#includedir /etc/sudoers.d" >> /etc/sudoers;
+        {% for u in effective_users %}
+        {% if u.sudo | default(true) | bool %}
+        echo "{{ u.username }} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/{{ u.username }}" && chmod 0440 "/etc/sudoers.d/{{ u.username }}";
+        usermod -a -G sudo "{{ u.username }}" 2>/dev/null || usermod -a -G wheel "{{ u.username }}" 2>/dev/null || true;
+        {% endif %}
+        {% endfor %}
+        '
+      register: linux_sudo_res
       failed_when: false
       changed_when: false
 
