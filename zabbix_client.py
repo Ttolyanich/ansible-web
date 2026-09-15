@@ -49,13 +49,13 @@ def extract_vpn_ip_from_comment(comment: Optional[str]) -> Optional[str]:
 def extract_port_from_comment(comment: Optional[str]) -> Optional[int]:
     """
     Extracts custom SSH port from Zabbix host comment (description).
-    Matches patterns like '10.20.8.179:2222', 'порт: 2222', 'port 2222', 'ssh port: 2222'.
+    Matches patterns like '10.0.0.10:2222', 'порт: 2222', 'port 2222', 'ssh port: 2222'.
     Validates port is within 1..65535. Returns int or None.
     """
     if not comment:
         return None
 
-    # 1. IP:PORT pattern (e.g. 10.20.8.179:2222)
+    # 1. IP:PORT pattern (e.g. 10.0.0.10:2222)
     m = IP_PORT_PATTERN.search(comment)
     if m:
         try:

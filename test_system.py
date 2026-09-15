@@ -124,14 +124,14 @@ def test_candidate_credentials_fallback():
     from task_engine import get_candidate_credentials
 
     with app.app_context():
-        # Setup 2 profiles for Linux: root (key) and itsgsrv (password)
+        # Setup 2 profiles for Linux: root (key) and sysadmin (password)
         p_root = CredentialProfile(name="P_Root", os_type="linux", ssh_user="root", is_default=True, auth_type="key")
         p_root.private_key = "dummy-private-key"
-        p_itsgsrv = CredentialProfile(name="P_Itsgsrv", os_type="linux", ssh_user="itsgsrv", is_default=False, auth_type="password")
-        p_itsgsrv.password = "secret123"
+        p_sysadmin = CredentialProfile(name="P_Sysadmin", os_type="linux", ssh_user="sysadmin", is_default=False, auth_type="password")
+        p_sysadmin.password = "secret123"
         
         db.session.add(p_root)
-        db.session.add(p_itsgsrv)
+        db.session.add(p_sysadmin)
         db.session.commit()
 
         test_host = Host.query.filter_by(zabbix_hostid="test-host-1").first()
@@ -142,16 +142,16 @@ def test_candidate_credentials_fallback():
         assert cands[0]["user"] == "root", f"First candidate must be default (root), got {cands[0]['user']}"
         assert cands[0]["auth_type"] == "key"
         
-        # Check that itsgsrv is among fallback candidates
-        itsg_cand = next((c for c in cands if c["user"] == "itsgsrv"), None)
-        assert itsg_cand is not None, "itsgsrv must be in fallback candidate list!"
-        assert itsg_cand["auth_type"] == "password"
-        assert itsg_cand["password"] == "secret123"
+        # Check that sysadmin is among fallback candidates
+        sysadmin_cand = next((c for c in cands if c["user"] == "sysadmin"), None)
+        assert sysadmin_cand is not None, "sysadmin must be in fallback candidate list!"
+        assert sysadmin_cand["auth_type"] == "password"
+        assert sysadmin_cand["password"] == "secret123"
 
         print(f"  [OK] Fallback candidate credentials verified: {[c['user'] + ' (' + c['auth_type'] + ')' for c in cands]}")
 
         db.session.delete(p_root)
-        db.session.delete(p_itsgsrv)
+        db.session.delete(p_sysadmin)
         db.session.commit()
 
 def test_vpn_extraction_and_manual_override():
@@ -161,9 +161,9 @@ def test_vpn_extraction_and_manual_override():
     from models import Host
 
     # Test parser
-    assert extract_vpn_ip_from_comment("VPN: 10.20.8.179") == "10.20.8.179"
-    assert extract_vpn_ip_from_comment("Хост за прокси. впн: 10.200.1.5") == "10.200.1.5"
-    assert extract_vpn_ip_from_comment("10.20.8.192") == "10.20.8.192"
+    assert extract_vpn_ip_from_comment("VPN: 10.0.0.10") == "10.0.0.10"
+    assert extract_vpn_ip_from_comment("Хост за прокси. впн: 10.0.1.5") == "10.0.1.5"
+    assert extract_vpn_ip_from_comment("10.0.0.12") == "10.0.0.12"
     assert extract_vpn_ip_from_comment("WireGuard 10.10.0.44") == "10.10.0.44"
     assert extract_vpn_ip_from_comment("IP VPN: 172.16.20.5") == "172.16.20.5"
     assert extract_vpn_ip_from_comment("127.0.0.1") is None
@@ -176,7 +176,7 @@ def test_vpn_extraction_and_manual_override():
             h = Host(
                 zabbix_hostid="test-host-vpn",
                 name="test-vpn-srv",
-                ip_address="10.20.8.179",
+                ip_address="10.0.0.10",
                 is_ip_manually_set=True,
                 ip_source="manual",
                 zabbix_agent_ip="192.168.1.50"
@@ -200,7 +200,7 @@ def test_ssh_port_handling():
     import shutil
 
     # 1. Test port extraction from comments
-    assert extract_port_from_comment("10.20.8.179:2222") == 2222
+    assert extract_port_from_comment("10.0.0.10:2222") == 2222
     assert extract_port_from_comment("Хост за NAT. порт 2202") == 2202
     assert extract_port_from_comment("port: 22222") == 22222
     assert extract_port_from_comment("ssh port 8022") == 8022
@@ -214,7 +214,7 @@ def test_ssh_port_handling():
         h = Host(
             zabbix_hostid="test-host-port-custom",
             name="test-port-srv",
-            ip_address="10.20.8.180",
+            ip_address="10.0.0.15",
             ssh_port=2222,
             os_type="linux"
         )
@@ -262,7 +262,7 @@ def test_os_detection_and_manual_preservation():
         h = Host(
             zabbix_hostid="test-host-manual-os",
             name="tp-link-office",
-            ip_address="10.20.8.181",
+            ip_address="10.0.0.16",
             os_type="network",
             is_os_manually_set=True
         )
@@ -316,7 +316,7 @@ def test_ssh_key_normalization_and_ping_escalation():
             h = Host(
                 zabbix_hostid="test-ping-host",
                 name="test-ping-host",
-                ip_address="10.20.8.25",
+                ip_address="10.0.0.25",
                 os_type="linux",
                 group_id=grp.id if grp else None
             )
@@ -325,7 +325,7 @@ def test_ssh_key_normalization_and_ping_escalation():
 
         creds = {
             "auth_type": "key",
-            "user": "itsgsrv",
+            "user": "sysadmin",
             "private_key": crlf_key,
             "become_method": "sudo",
             "sudo_password": ""

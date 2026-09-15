@@ -125,7 +125,7 @@ class ZabbixSetting(db.Model):
 
 
 class CredentialProfile(db.Model):
-    """SSH Credentials Profile (e.g. Linux root, Linux itsgsrv, Windows ITSGSRV)."""
+    """SSH Credentials Profile (e.g. Linux root, Linux sysadmin, Windows Administrator)."""
     __tablename__ = "credential_profiles"
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False) # e.g. "Default Linux (root)"
