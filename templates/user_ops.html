@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block title %}Управление учетными записями на серверах{% endblock %}
 
@@ -6,14 +6,20 @@
 <div class="max-w-4xl mx-auto space-y-6">
     <!-- Header -->
     <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl">
-        <div class="flex items-center gap-3">
-            <div class="w-12 h-12 rounded-xl bg-purple-950/80 border border-purple-800 text-purple-400 flex items-center justify-center text-2xl">
-                <i class="fa-solid fa-user-shield"></i>
+        <div class="flex items-center justify-between flex-wrap gap-4">
+            <div class="flex items-center gap-3">
+                <div class="w-12 h-12 rounded-xl bg-purple-950/80 border border-purple-800 text-purple-400 flex items-center justify-center text-2xl">
+                    <i class="fa-solid fa-user-shield"></i>
+                </div>
+                <div>
+                    <h1 class="text-2xl font-bold text-white tracking-tight">Мастер управления учетными записями</h1>
+                    <p class="text-xs text-slate-400 mt-0.5">Массовое создание и удаление учетных записей администраторов на Linux и Windows хостах</p>
+                </div>
             </div>
-            <div>
-                <h1 class="text-2xl font-bold text-white tracking-tight">Мастер управления учетными записями</h1>
-                <p class="text-xs text-slate-400 mt-0.5">Массовое создание и удаление учетных записей администраторов на Linux и Windows хостах</p>
-            </div>
+            <a href="{{ url_for('staff_list') }}" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-2">
+                <i class="fa-solid fa-users text-purple-400"></i>
+                Каталог сотрудников
+            </a>
         </div>
     </div>
 
@@ -33,7 +39,7 @@
                         <div class="flex items-center gap-3">
                             <i class="fa-solid fa-user-plus text-2xl text-purple-400"></i>
                             <div>
-                                <div class="font-bold text-white text-sm">Создать пользователя</div>
+                                <div class="font-bold text-white text-sm">Создать доступ (пользователей)</div>
                                 <div class="text-xs text-slate-400 mt-0.5">SSH-ключ (Linux), пароль и админ-права (Windows)</div>
                             </div>
                         </div>
@@ -46,8 +52,8 @@
                         <div class="flex items-center gap-3">
                             <i class="fa-solid fa-user-minus text-2xl text-red-400"></i>
                             <div>
-                                <div class="font-bold text-white text-sm">Удалить пользователя</div>
-                                <div class="text-xs text-slate-400 mt-0.5">Завершение процессов и удаление учетки</div>
+                                <div class="font-bold text-white text-sm">Отозвать доступ (удалить учетку)</div>
+                                <div class="text-xs text-slate-400 mt-0.5">Завершение процессов и удаление учетной записи с серверов</div>
                             </div>
                         </div>
                     </div>
@@ -116,61 +122,153 @@
             </div>
         </div>
 
-        <!-- Step 3: Account Credentials & Details -->
+        <!-- Step 3: Users Selection (Catalog vs Manual) -->
         <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl space-y-5">
-            <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-4 flex items-center gap-2">
-                <span class="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs">3</span>
-                Параметры учетной записи
-            </h2>
+            <div class="flex items-center justify-between flex-wrap gap-3">
+                <h2 class="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <span class="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs">3</span>
+                    Кого назначить / удалить?
+                </h2>
 
-            <!-- Username (Required for both) -->
-            <div>
-                <label for="username" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                    Имя пользователя <span class="text-red-500">*</span>
-                </label>
-                <input type="text" id="target_username" name="target_username" required placeholder="например: it_admin или support"
-                       class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm focus:ring-2 focus:ring-red-500">
-                <p class="text-[11px] text-slate-500 mt-1">Только латинские буквы, цифры и символы дефис/подчеркивание</p>
+                <!-- Source Switcher: Catalog vs Manual -->
+                <div class="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+                    <label class="cursor-pointer">
+                        <input type="radio" name="source_mode" value="catalog" class="sr-only peer" {% if staff_members|length > 0 %}checked{% endif %} onchange="toggleSourceMode()">
+                        <span class="px-3 py-1.5 rounded-md block transition peer-checked:bg-purple-600 peer-checked:text-white text-slate-400 font-semibold">
+                            <i class="fa-solid fa-users mr-1"></i> Из каталога (пакетом)
+                        </span>
+                    </label>
+                    <label class="cursor-pointer">
+                        <input type="radio" name="source_mode" value="manual" class="sr-only peer" {% if staff_members|length == 0 %}checked{% endif %} onchange="toggleSourceMode()">
+                        <span class="px-3 py-1.5 rounded-md block transition peer-checked:bg-purple-600 peer-checked:text-white text-slate-400 font-semibold">
+                            <i class="fa-solid fa-keyboard mr-1"></i> Вручную (один)
+                        </span>
+                    </label>
+                </div>
             </div>
 
-            <!-- Fields for CREATE mode -->
-            <div id="create-fields" class="space-y-5">
-                <!-- Linux SSH Key -->
-                <div>
-                    <label for="ssh_key" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex justify-between items-center">
-                        <span>Публичный SSH-ключ (для Linux хостов)</span>
-                        <span class="text-[10px] text-slate-500 font-normal">authorized_keys</span>
-                    </label>
-                    <textarea id="ssh_key" name="target_ssh_key" rows="3" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@desktop"
-                              class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-xs focus:ring-2 focus:ring-red-500"></textarea>
-                    <p class="text-[11px] text-slate-500 mt-1">Ключ будет добавлен в ~/.ssh/authorized_keys созданного пользователя</p>
-                </div>
-
-                <!-- Windows Password -->
-                <div>
-                    <label for="password" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex justify-between items-center">
-                        <span>Пароль пользователя (для Windows хостов)</span>
-                        <button type="button" onclick="generateRandomPassword()" class="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1">
-                            <i class="fa-solid fa-wand-magic-sparkles"></i> Сгенерировать сложный пароль
+            <!-- SECTION A: Catalog Multi-Select -->
+            <div id="catalog-section" class="{% if staff_members|length == 0 %}hidden{% endif %} space-y-4">
+                <div class="flex items-center justify-between text-xs bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
+                    <div class="text-slate-400">
+                        Выберите сотрудников из списка ниже (можно выбрать сразу несколько):
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="selectAllStaff(true)" class="text-xs text-purple-400 hover:text-purple-300 font-semibold transition">
+                            Выбрать всех
                         </button>
-                    </label>
-                    <input type="text" id="target_password" name="target_password" placeholder="Укажите пароль..."
-                           class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm focus:ring-2 focus:ring-red-500">
-                    <p class="text-[11px] text-slate-500 mt-1">Windows требует надежный пароль (буквы разного регистра, цифры и спецсимволы)</p>
+                        <span class="text-slate-600">|</span>
+                        <button type="button" onclick="selectAllStaff(false)" class="text-xs text-slate-400 hover:text-slate-300 font-semibold transition">
+                            Снять выбор
+                        </button>
+                    </div>
                 </div>
 
-                <!-- Sudo / Administrators Privilege -->
-                <div class="p-4 bg-slate-950/70 border border-slate-800 rounded-lg flex items-start gap-3">
-                    <input type="checkbox" id="target_sudo" name="target_sudo" value="1" checked
-                           class="mt-1 rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-red-500">
+                {% if staff_members %}
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[380px] overflow-y-auto pr-1">
+                    {% for s in staff_members %}
+                    <label class="cursor-pointer block select-none">
+                        <input type="checkbox" name="staff_ids" value="{{ s.id }}" data-name="{{ s.name }}" data-username="{{ s.username }}"
+                               {% if s.id|string in selected_staff_ids %}checked{% endif %}
+                               class="staff-checkbox sr-only peer" onchange="updateStaffCardSelection(this)">
+                        <div class="p-3.5 rounded-xl border border-slate-800 bg-slate-950/60 peer-checked:border-purple-500 peer-checked:bg-purple-950/20 hover:border-slate-700 transition flex items-start gap-3">
+                            <div class="w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 font-bold text-sm shrink-0 peer-checked:bg-purple-900 peer-checked:text-purple-200">
+                                {{ s.name[:1]|upper }}
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center justify-between gap-1">
+                                    <span class="font-bold text-white text-sm truncate">{{ s.name }}</span>
+                                    <span class="font-mono text-xs text-purple-400 font-semibold shrink-0">@{{ s.username }}</span>
+                                </div>
+                                <div class="text-[11px] text-slate-400 truncate mt-0.5">
+                                    {{ s.department or 'Без отдела' }}
+                                </div>
+                                <div class="flex items-center gap-2 mt-2">
+                                    {% if s.ssh_public_key %}
+                                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 flex items-center gap-1 font-mono">
+                                        <i class="fa-solid fa-key text-[9px]"></i> SSH
+                                    </span>
+                                    {% endif %}
+                                    {% if s.encrypted_password %}
+                                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-sky-950/80 text-sky-400 border border-sky-800/60 flex items-center gap-1">
+                                        <i class="fa-solid fa-lock text-[9px]"></i> Пароль
+                                    </span>
+                                    {% endif %}
+                                    {% if s.sudo_enabled %}
+                                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-400 border border-amber-800/60 flex items-center gap-1">
+                                        <i class="fa-solid fa-shield-halved text-[9px]"></i> Sudo
+                                    </span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </label>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="p-8 text-center bg-slate-950 border border-dashed border-slate-800 rounded-xl">
+                    <i class="fa-solid fa-users-slash text-3xl text-slate-600 mb-2"></i>
+                    <p class="text-sm text-slate-400">В каталоге пока нет сотрудников.</p>
+                    <div class="mt-3 flex justify-center gap-3">
+                        <a href="{{ url_for('staff_list') }}" target="_blank" class="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg transition">
+                            <i class="fa-solid fa-user-plus mr-1"></i> Добавить сотрудников в каталог
+                        </a>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- SECTION B: Manual Input (Single User) -->
+            <div id="manual-section" class="{% if staff_members|length > 0 %}hidden{% endif %} space-y-4">
+                <!-- Username -->
+                <div>
+                    <label for="target_username" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                        Имя пользователя (системный логин) <span class="text-red-500">*</span>
+                    </label>
+                    <input type="text" id="target_username" name="target_username" placeholder="например: it_admin или support"
+                           class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm focus:ring-2 focus:ring-red-500">
+                    <p class="text-[11px] text-slate-500 mt-1">Только латинские буквы, цифры и символы дефис/подчеркивание</p>
+                </div>
+
+                <!-- Fields for CREATE mode (Manual) -->
+                <div id="create-manual-fields" class="space-y-4">
+                    <!-- Linux SSH Key -->
                     <div>
-                        <label for="target_sudo" class="text-sm font-bold text-white cursor-pointer">
-                            Предоставить права Администратора (Root / Sudo / Local Admins)
+                        <label for="ssh_key" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex justify-between items-center">
+                            <span>Публичный SSH-ключ (для Linux хостов)</span>
+                            <span class="text-[10px] text-slate-500 font-normal">authorized_keys</span>
                         </label>
-                        <p class="text-xs text-slate-400 mt-0.5">
-                            Linux: запись в <code class="text-amber-300">/etc/sudoers.d/username</code> (NOPASSWD: ALL)<br>
-                            Windows: добавление в группу <code class="text-sky-300">Administrators</code>
-                        </p>
+                        <textarea id="ssh_key" name="target_ssh_key" rows="3" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... user@desktop"
+                                  class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-xs focus:ring-2 focus:ring-red-500"></textarea>
+                        <p class="text-[11px] text-slate-500 mt-1">Ключ будет добавлен в ~/.ssh/authorized_keys созданного пользователя</p>
+                    </div>
+
+                    <!-- Windows Password -->
+                    <div>
+                        <label for="target_password" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2 flex justify-between items-center">
+                            <span>Пароль пользователя (для Windows хостов)</span>
+                            <button type="button" onclick="generateRandomPassword()" class="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1">
+                                <i class="fa-solid fa-wand-magic-sparkles"></i> Сгенерировать пароль
+                            </button>
+                        </label>
+                        <input type="text" id="target_password" name="target_password" placeholder="Укажите пароль..."
+                               class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-sm focus:ring-2 focus:ring-red-500">
+                        <p class="text-[11px] text-slate-500 mt-1">Windows требует надежный пароль (буквы разного регистра, цифры и спецсимволы)</p>
+                    </div>
+
+                    <!-- Sudo / Administrators Privilege -->
+                    <div class="p-4 bg-slate-950/70 border border-slate-800 rounded-lg flex items-start gap-3">
+                        <input type="checkbox" id="target_sudo" name="target_sudo" value="1" checked
+                               class="mt-1 rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-red-500">
+                        <div>
+                            <label for="target_sudo" class="text-sm font-bold text-white cursor-pointer">
+                                Предоставить права Администратора (Root / Sudo / Local Admins)
+                            </label>
+                            <p class="text-xs text-slate-400 mt-0.5">
+                                Linux: запись в <code class="text-amber-300">/etc/sudoers.d/username</code> (NOPASSWD: ALL)<br>
+                                Windows: добавление в группу <code class="text-sky-300">Administrators</code>
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -179,7 +277,7 @@
             <div class="pt-4 border-t border-slate-800 flex justify-end">
                 <button type="submit" id="submit-btn" class="px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg shadow-lg shadow-purple-950/50 transition flex items-center gap-2">
                     <i class="fa-solid fa-play"></i>
-                    <span id="submit-btn-text">Запустить создание пользователя</span>
+                    <span id="submit-btn-text">Запустить создание доступа</span>
                 </button>
             </div>
         </div>
@@ -189,20 +287,34 @@
 
 {% block extra_scripts %}
 <script>
+    function toggleSourceMode() {
+        const sourceMode = document.querySelector('input[name="source_mode"]:checked').value;
+        const catalogSec = document.getElementById('catalog-section');
+        const manualSec = document.getElementById('manual-section');
+
+        if (sourceMode === 'catalog') {
+            catalogSec.classList.remove('hidden');
+            manualSec.classList.add('hidden');
+        } else {
+            catalogSec.classList.add('hidden');
+            manualSec.classList.remove('hidden');
+        }
+    }
+
     function toggleOperationMode() {
         const op = document.querySelector('input[name="operation"]:checked').value;
-        const createFields = document.getElementById('create-fields');
+        const createManualFields = document.getElementById('create-manual-fields');
         const submitBtn = document.getElementById('submit-btn');
         const submitText = document.getElementById('submit-btn-text');
 
         if (op === 'delete') {
-            createFields.classList.add('hidden');
+            createManualFields.classList.add('hidden');
             submitBtn.className = "px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg shadow-lg shadow-red-950/50 transition flex items-center gap-2";
-            submitText.innerText = "Запустить удаление пользователя";
+            submitText.innerText = "Запустить отзыв доступа / удаление";
         } else {
-            createFields.classList.remove('hidden');
+            createManualFields.classList.remove('hidden');
             submitBtn.className = "px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg shadow-lg shadow-purple-950/50 transition flex items-center gap-2";
-            submitText.innerText = "Запустить создание пользователя";
+            submitText.innerText = "Запустить создание доступа";
         }
     }
 
@@ -216,6 +328,17 @@
         }
     }
 
+    function selectAllStaff(state) {
+        const checkboxes = document.querySelectorAll('.staff-checkbox');
+        checkboxes.forEach(cb => {
+            cb.checked = state;
+        });
+    }
+
+    function updateStaffCardSelection(checkbox) {
+        // Handled dynamically
+    }
+
     function generateRandomPassword() {
         const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*+";
         let pass = "";
@@ -227,20 +350,40 @@
 
     function confirmAction() {
         const op = document.querySelector('input[name="operation"]:checked').value;
-        const username = document.getElementById('target_username').value.trim();
-        if (!username) {
-            alert('Укажите имя пользователя!');
-            return false;
-        }
+        const sourceMode = document.querySelector('input[name="source_mode"]:checked').value;
 
-        if (op === 'delete') {
-            return confirm(`ВНИМАНИЕ! Вы собираетесь УДАЛИТЬ пользователя "${username}" с серверов.\nВсе запущенные процессы пользователя будут принудительно завершены.\n\nПродолжить?`);
+        if (sourceMode === 'catalog') {
+            const checkedBoxes = Array.from(document.querySelectorAll('.staff-checkbox:checked'));
+            if (checkedBoxes.length === 0) {
+                alert('Пожалуйста, выберите хотя бы одного сотрудника из списка!');
+                return false;
+            }
+            const names = checkedBoxes.map(cb => cb.dataset.username || cb.dataset.name).slice(0, 5).join(', ');
+            const extra = checkedBoxes.length > 5 ? ` и еще ${checkedBoxes.length - 5}` : '';
+
+            if (op === 'delete') {
+                return confirm(`ВНИМАНИЕ! Вы собираетесь ОТОЗВАТЬ ДОСТУП И УДАЛИТЬ (${checkedBoxes.length} чел.):\n[${names}${extra}]\nсо всех выбранных целевых серверов.\n\nПродолжить?`);
+            } else {
+                return confirm(`Запустить создание учетных записей для (${checkedBoxes.length} чел.):\n[${names}${extra}]\nна выбранных целевых серверах?`);
+            }
+        } else {
+            const username = document.getElementById('target_username').value.trim();
+            if (!username) {
+                alert('Укажите имя пользователя!');
+                document.getElementById('target_username').focus();
+                return false;
+            }
+
+            if (op === 'delete') {
+                return confirm(`ВНИМАНИЕ! Вы собираетесь УДАЛИТЬ пользователя "${username}" с выбранных серверов.\nВсе процессы пользователя будут принудительно завершены.\n\nПродолжить?`);
+            }
+            return confirm(`Запустить создание пользователя "${username}" на целевых серверах?`);
         }
-        return confirm(`Запустить создание пользователя "${username}" на целевых серверах?`);
     }
 
     // Initialize state
     toggleOperationMode();
     toggleTargetScope();
+    toggleSourceMode();
 </script>
 {% endblock %}

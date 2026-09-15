@@ -69,10 +69,42 @@ class User(UserMixin, db.Model):
         return self.role == "admin"
 
 
+class StaffMember(db.Model):
+    __tablename__ = "staff_members"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    ssh_public_key = db.Column(db.Text, nullable=True)
+    encrypted_password = db.Column(db.Text, nullable=True)
+    sudo_enabled = db.Column(db.Boolean, default=True)
+    department = db.Column(db.String(100), nullable=True)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    @property
+    def password(self) -> str:
+        return CryptoHelper.decrypt(self.encrypted_password)
+
+    @password.setter
+    def password(self, val: str):
+        self.encrypted_password = CryptoHelper.encrypt(val) if val else ""
+
+    def key_fingerprint_short(self) -> str:
+        if not self.ssh_public_key:
+            return "Без ключа"
+        parts = self.ssh_public_key.strip().split()
+        if len(parts) >= 2:
+            ktype = parts[0]
+            kbody = parts[1]
+            return f"{ktype} ...{kbody[-12:]}"
+        return "SSH-ключ задан"
+
+
 class ZabbixSetting(db.Model):
     __tablename__ = "zabbix_settings"
     id = db.Column(db.Integer, primary_key=True)
     url = db.Column(db.String(255), nullable=False, default="http://zabbix-server/api_jsonrpc.php")
+
     encrypted_token = db.Column(db.Text, nullable=True) # API Token
     verify_ssl = db.Column(db.Boolean, default=False)
     auto_sync = db.Column(db.Boolean, default=False)

@@ -1,37 +1,47 @@
----
+﻿---
 - name: Create Administrator Account on Linux & Windows
   hosts: all
   gather_facts: false
 
   tasks:
+    - name: Normalize target users list
+      ansible.builtin.set_fact:
+        effective_users: >-
+          {{
+            target_users if (target_users is defined and target_users is iterable and target_users | length > 0)
+            else [{'username': target_username, 'ssh_key': target_ssh_key | default(''), 'sudo': target_sudo | default(true) | bool, 'password': target_password | default('')}]
+          }}
+
     # -------------------------------------------------------------
     # LINUX TARGETS
     # -------------------------------------------------------------
-    - name: "[Linux] Ensure user exists with home directory"
+    - name: "[Linux] Ensure users exist with home directories"
       when: os_type | default('linux') == 'linux'
       ansible.builtin.user:
-        name: "{{ target_username }}"
+        name: "{{ item.username }}"
         shell: /bin/bash
         create_home: true
         state: present
+      loop: "{{ effective_users }}"
       register: linux_user_res
 
     - name: "[Linux] Setup SSH authorized_keys"
       when: 
         - os_type | default('linux') == 'linux'
-        - target_ssh_key is defined
-        - target_ssh_key | trim | length > 0
+        - item.ssh_key is defined
+        - item.ssh_key | trim | length > 0
       ansible.posix.authorized_key:
-        user: "{{ target_username }}"
-        key: "{{ target_ssh_key }}"
+        user: "{{ item.username }}"
+        key: "{{ item.ssh_key }}"
         state: present
         exclusive: false
+      loop: "{{ effective_users }}"
       register: linux_key_res
 
     - name: "[Linux] Check if sudo is installed"
       when: 
         - os_type | default('linux') == 'linux'
-        - target_sudo | default(true) | bool
+        - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
       ansible.builtin.raw: which sudo || command -v sudo
       register: sudo_check
       failed_when: false
@@ -40,8 +50,8 @@
     - name: "[Linux] Install sudo package if missing (Debian / Ubuntu / CentOS / RHEL / Alpine)"
       when: 
         - os_type | default('linux') == 'linux'
-        - target_sudo | default(true) | bool
-        - sudo_check.rc != 0
+        - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
+        - sudo_check.rc is defined and sudo_check.rc != 0
       ansible.builtin.raw: >
         (command -v apt-get >/dev/null 2>&1 && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo) ||
         (command -v yum >/dev/null 2>&1 && yum install -y sudo) ||
@@ -54,7 +64,7 @@
     - name: "[Linux] Ensure /etc/sudoers.d directory exists"
       when: 
         - os_type | default('linux') == 'linux'
-        - target_sudo | default(true) | bool
+        - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
       ansible.builtin.file:
         path: /etc/sudoers.d
         state: directory
@@ -66,7 +76,7 @@
     - name: "[Linux] Ensure /etc/sudoers includes /etc/sudoers.d"
       when: 
         - os_type | default('linux') == 'linux'
-        - target_sudo | default(true) | bool
+        - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
       ansible.builtin.lineinfile:
         path: /etc/sudoers
         line: "#includedir /etc/sudoers.d"
@@ -77,49 +87,53 @@
     - name: "[Linux] Add user to sudo/wheel groups if present"
       when: 
         - os_type | default('linux') == 'linux'
-        - target_sudo | default(true) | bool
-      ansible.builtin.user:
-        name: "{{ target_username }}"
-        groups: "{{ item }}"
-        append: true
-      loop:
-        - sudo
-        - wheel
+        - item.sudo | default(true) | bool
+      ansible.builtin.raw: >
+        usermod -a -G sudo {{ item.username }} 2>/dev/null || usermod -a -G wheel {{ item.username }} 2>/dev/null || true
+      loop: "{{ effective_users }}"
       failed_when: false
+      changed_when: false
 
     - name: "[Linux] Configure sudoers permissions (NOPASSWD)"
       when: 
         - os_type | default('linux') == 'linux'
-        - target_sudo | default(true) | bool
+        - item.sudo | default(true) | bool
       ansible.builtin.copy:
-        dest: "/etc/sudoers.d/{{ target_username }}"
-        content: "{{ target_username }} ALL=(ALL) NOPASSWD: ALL\n"
+        dest: "/etc/sudoers.d/{{ item.username }}"
+        content: "{{ item.username }} ALL=(ALL) NOPASSWD: ALL\n"
         mode: '0440'
         validate: 'visudo -cf %s'
+      loop: "{{ effective_users }}"
       register: linux_sudo_res
 
     # -------------------------------------------------------------
     # WINDOWS TARGETS (via OpenSSH)
     # -------------------------------------------------------------
     - name: "[Windows] Create local user and set password"
-      when: os_type | default('linux') == 'windows'
+      when: 
+        - os_type | default('linux') == 'windows'
+        - item.password is defined
+        - item.password | length > 0
       ansible.builtin.raw: >
-        net user {{ target_username }} "{{ target_password }}" /add /y /expires:never
+        net user {{ item.username }} "{{ item.password }}" /add /y /expires:never
+      loop: "{{ effective_users }}"
       register: win_user_res
       changed_when: "'command completed successfully' in win_user_res.stdout | lower or win_user_res.rc == 0"
 
     - name: "[Windows] Add user to local Administrators group"
       when: 
         - os_type | default('linux') == 'windows'
-        - target_sudo | default(true) | bool
+        - item.sudo | default(true) | bool
       ansible.builtin.raw: >
-        net localgroup "Administrators" {{ target_username }} /add
+        net localgroup "Administrators" {{ item.username }} /add
+      loop: "{{ effective_users }}"
       register: win_group_res
       changed_when: "'command completed successfully' in win_group_res.stdout | lower or win_group_res.rc == 0"
 
     - name: "[Windows] Prevent password expiration"
       when: os_type | default('linux') == 'windows'
       ansible.builtin.raw: >
-        wmic useraccount where name='{{ target_username }}' set PasswordExpires=FALSE
+        wmic useraccount where name='{{ item.username }}' set PasswordExpires=FALSE
+      loop: "{{ effective_users }}"
       register: win_pass_res
       changed_when: false

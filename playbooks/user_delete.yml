@@ -1,37 +1,53 @@
----
+﻿---
 - name: Remove Administrator Account on Linux & Windows
   hosts: all
   gather_facts: false
 
   tasks:
+    - name: Normalize target users list
+      ansible.builtin.set_fact:
+        effective_users: >-
+          {{
+            target_users if (target_users is defined and target_users is iterable and target_users | length > 0)
+            else [{'username': target_username}]
+          }}
+
     # -------------------------------------------------------------
     # LINUX TARGETS
     # -------------------------------------------------------------
-    - name: "[Linux] Kill all running processes of user"
+    - name: "[Linux] Kill all running processes of users"
       when: os_type | default('linux') == 'linux'
-      ansible.builtin.raw: "pkill -9 -u {{ target_username }} || true"
+      ansible.builtin.raw: "pkill -9 -u {{ item.username }} || true"
+      loop: "{{ effective_users }}"
       changed_when: false
+      failed_when: false
 
-    - name: "[Linux] Remove sudoers drop-in file"
+    - name: "[Linux] Remove sudoers drop-in files"
       when: os_type | default('linux') == 'linux'
       ansible.builtin.file:
-        path: "/etc/sudoers.d/{{ target_username }}"
+        path: "/etc/sudoers.d/{{ item.username }}"
         state: absent
+      loop: "{{ effective_users }}"
+      failed_when: false
 
-    - name: "[Linux] Delete user and home directory"
+    - name: "[Linux] Delete users and home directories"
       when: os_type | default('linux') == 'linux'
       ansible.builtin.user:
-        name: "{{ target_username }}"
+        name: "{{ item.username }}"
         state: absent
         remove: true
+      loop: "{{ effective_users }}"
       register: linux_del_res
+      failed_when: false
 
     # -------------------------------------------------------------
     # WINDOWS TARGETS (via OpenSSH)
     # -------------------------------------------------------------
-    - name: "[Windows] Delete local user"
+    - name: "[Windows] Delete local users"
       when: os_type | default('linux') == 'windows'
       ansible.builtin.raw: >
-        net user {{ target_username }} /delete
+        net user {{ item.username }} /delete
+      loop: "{{ effective_users }}"
       register: win_del_res
       changed_when: "'command completed successfully' in win_del_res.stdout | lower or win_del_res.rc == 0"
+      failed_when: false

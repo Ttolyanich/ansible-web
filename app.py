@@ -11,7 +11,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 load_dotenv()
 
 from models import (
-    db, User, ZabbixSetting, CredentialProfile, 
+    db, User, StaffMember, ZabbixSetting, CredentialProfile, 
     HostGroup, Host, TaskJob, AuditLog
 )
 from zabbix_client import ZabbixClient, sync_zabbix_to_db
@@ -300,6 +300,97 @@ def run_ping_batch():
 
 
 # -------------------------------------------------------------
+# Staff / Employees Directory
+# -------------------------------------------------------------
+@app.route("/staff")
+@login_required
+def staff_view():
+    staff = StaffMember.query.order_by(StaffMember.name).all()
+    return render_template("staff.html", staff=staff)
+
+@app.route("/staff/create", methods=["POST"])
+@login_required
+@admin_required
+def create_staff():
+    name = request.form.get("name", "").strip()
+    username = request.form.get("username", "").strip()
+    department = request.form.get("department", "").strip()
+    password = request.form.get("password", "").strip()
+    ssh_public_key = request.form.get("ssh_public_key", "").strip()
+    sudo_enabled = request.form.get("sudo_enabled") == "1"
+    is_active = request.form.get("is_active") == "1"
+
+    if not name or not username:
+        flash("ФИО и системный логин обязательны для заполнения.", "danger")
+        return redirect(url_for("staff_view"))
+
+    existing = StaffMember.query.filter_by(username=username).first()
+    if existing:
+        flash(f"Сотрудник с логином '{username}' уже существует.", "danger")
+        return redirect(url_for("staff_view"))
+
+    staff = StaffMember(
+        name=name,
+        username=username,
+        department=department,
+        ssh_public_key=ssh_public_key,
+        sudo_enabled=sudo_enabled,
+        is_active=is_active
+    )
+    if password:
+        staff.password = password
+
+    db.session.add(staff)
+    db.session.commit()
+    flash(f"Сотрудник «{name}» ({username}) успешно добавлен в каталог.", "success")
+    return redirect(url_for("staff_view"))
+
+@app.route("/staff/<int:staff_id>/edit", methods=["POST"])
+@login_required
+@admin_required
+def edit_staff(staff_id):
+    staff = db.get_or_404(StaffMember, staff_id)
+    name = request.form.get("name", "").strip()
+    username = request.form.get("username", "").strip()
+    department = request.form.get("department", "").strip()
+    password = request.form.get("password", "").strip()
+    ssh_public_key = request.form.get("ssh_public_key", "").strip()
+    sudo_enabled = request.form.get("sudo_enabled") == "1"
+    is_active = request.form.get("is_active") == "1"
+
+    if username and username != staff.username:
+        existing = StaffMember.query.filter_by(username=username).first()
+        if existing:
+            flash(f"Логин '{username}' уже занят другим сотрудником.", "danger")
+            return redirect(url_for("staff_view"))
+        staff.username = username
+
+    if name:
+        staff.name = name
+    staff.department = department
+    staff.ssh_public_key = ssh_public_key
+    staff.sudo_enabled = sudo_enabled
+    staff.is_active = is_active
+    if password:
+        staff.password = password
+
+    db.session.commit()
+    flash(f"Данные сотрудника «{staff.name}» успешно обновлены.", "success")
+    return redirect(url_for("staff_view"))
+
+@app.route("/staff/<int:staff_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def delete_staff(staff_id):
+    staff = db.get_or_404(StaffMember, staff_id)
+    name = staff.name
+    db.session.delete(staff)
+    db.session.commit()
+    flash(f"Сотрудник «{name}» удален из каталога.", "info")
+    return redirect(url_for("staff_view"))
+
+
+# -------------------------------------------------------------
 # User Operations (Create & Delete Master)
 # -------------------------------------------------------------
 @app.route("/user-ops", methods=["GET", "POST"])
@@ -317,13 +408,19 @@ def user_ops_view():
 
     groups = HostGroup.query.order_by(HostGroup.name).all()
     all_hosts_count = Host.query.filter_by(is_enabled=True).count()
+    staff_members = StaffMember.query.filter_by(is_active=True).order_by(StaffMember.name).all()
+    selected_staff_ids = request.args.getlist("staff_ids")
+    if not selected_staff_ids and request.args.get("staff_ids"):
+        selected_staff_ids = [request.args.get("staff_ids")]
 
     return render_template(
         "user_ops.html",
         groups=groups,
         all_hosts_count=all_hosts_count,
         selected_host_ids=selected_host_ids,
-        selected_group_id=request.args.get("group_id", "")
+        selected_group_id=request.args.get("group_id", ""),
+        staff_members=staff_members,
+        selected_staff_ids=selected_staff_ids
     )
 
 @app.route("/user-ops/run", methods=["POST"])
@@ -332,10 +429,45 @@ def run_user_ops():
     operation = request.form.get("operation", "create") # 'create' or 'delete'
     target_type = request.form.get("target_type", "all") # 'all', 'group', 'preselected'
     target_os = request.form.get("target_os", "all") # 'all', 'linux', 'windows'
-    target_username = request.form.get("target_username", "").strip()
+    source_mode = request.form.get("source_mode", "catalog") # 'catalog' or 'manual'
 
-    if not target_username:
-        flash("Имя пользователя обязательно для заполнения.", "danger")
+    target_users = []
+
+    if source_mode == "catalog":
+        staff_ids = request.form.getlist("staff_ids")
+        if not staff_ids:
+            flash("Пожалуйста, выберите хотя бы одного сотрудника из списка.", "danger")
+            return redirect(url_for("user_ops_view"))
+
+        int_ids = [int(i) for i in staff_ids if str(i).isdigit()]
+        staff_list = StaffMember.query.filter(StaffMember.id.in_(int_ids)).all()
+        for s in staff_list:
+            target_users.append({
+                "username": s.username,
+                "name": s.name,
+                "ssh_key": s.ssh_public_key or "",
+                "password": s.password or "",
+                "sudo": bool(s.sudo_enabled)
+            })
+    else:
+        target_username = request.form.get("target_username", "").strip()
+        if not target_username:
+            flash("Имя пользователя обязательно для заполнения.", "danger")
+            return redirect(url_for("user_ops_view"))
+        target_ssh_key = request.form.get("target_ssh_key", "").strip()
+        target_password = request.form.get("target_password", "").strip()
+        target_sudo = request.form.get("target_sudo") == "1"
+
+        target_users.append({
+            "username": target_username,
+            "name": target_username,
+            "ssh_key": target_ssh_key,
+            "password": target_password,
+            "sudo": target_sudo
+        })
+
+    if not target_users:
+        flash("Список пользователей пуст.", "danger")
         return redirect(url_for("user_ops_view"))
 
     # Determine target hosts
@@ -369,26 +501,28 @@ def run_user_ops():
     host_ids = [h.id for h in target_hosts]
 
     # Prepare Playbook & Extra Vars
+    usernames_preview = ", ".join([u["username"] for u in target_users[:3]])
+    if len(target_users) > 3:
+        usernames_preview += f" и еще {len(target_users) - 3}"
+
     if operation == "create":
         playbook_name = "user_create.yml"
-        target_ssh_key = request.form.get("target_ssh_key", "").strip()
-        target_password = request.form.get("target_password", "").strip()
-        target_sudo = request.form.get("target_sudo") == "1"
-
         extra_vars = {
-            "target_username": target_username,
-            "target_ssh_key": target_ssh_key,
-            "target_password": target_password,
-            "target_sudo": target_sudo
+            "target_users": target_users,
+            "target_username": target_users[0]["username"],
+            "target_ssh_key": target_users[0]["ssh_key"],
+            "target_password": target_users[0]["password"],
+            "target_sudo": target_users[0]["sudo"]
         }
-        summary = f"Создание пользователя '{target_username}' на {len(host_ids)} серверах"
+        summary = f"Создание доступа для [{usernames_preview}] ({len(target_users)} чел.) на {len(host_ids)} серверах"
         task_type = "user_create"
     else:
         playbook_name = "user_delete.yml"
         extra_vars = {
-            "target_username": target_username
+            "target_users": target_users,
+            "target_username": target_users[0]["username"]
         }
-        summary = f"Удаление пользователя '{target_username}' с {len(host_ids)} серверов"
+        summary = f"Отзыв доступа / удаление [{usernames_preview}] ({len(target_users)} чел.) с {len(host_ids)} серверов"
         task_type = "user_delete"
 
     task_id = dispatch_task(
@@ -399,11 +533,12 @@ def run_user_ops():
         extra_vars=extra_vars,
         user_id=current_user.id,
         summary=summary,
-        filter_info=f"Цели: {target_type}, ОС: {target_os}"
+        filter_info=f"Цели: {target_type}, ОС: {target_os}, Пользователи: {len(target_users)}"
     )
 
     flash(f"Задача «{summary}» успешно запущена!", "success")
     return redirect(url_for("task_detail", task_id=task_id))
+
 
 
 # -------------------------------------------------------------

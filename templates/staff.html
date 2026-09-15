@@ -1,0 +1,284 @@
+﻿{% extends "base.html" %}
+
+{% block title %}Каталог сотрудников и ключей{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Header Card -->
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900 border border-slate-800 p-5 rounded-xl">
+        <div>
+            <h1 class="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                <i class="fa-solid fa-users-gear text-purple-500"></i> Каталог сотрудников & SSH Ключи
+            </h1>
+            <p class="text-xs text-slate-400 mt-0.5">Управление профилями инженеров, публичными ключами и правами доступа на целевых серверах</p>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <a href="{{ url_for('user_ops_view') }}" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+                <i class="fa-solid fa-user-shield text-purple-400"></i>
+                <span>Мастер доступа на хостах</span>
+            </a>
+            <button type="button" onclick="openCreateStaffModal()" class="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5 cursor-pointer">
+                <i class="fa-solid fa-plus"></i>
+                <span>Добавить сотрудника</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Staff Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {% for s in staff %}
+        <div class="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-5 flex flex-col justify-between transition shadow-sm">
+            <div>
+                <!-- Top Badge Row -->
+                <div class="flex justify-between items-start mb-3">
+                    <span class="text-[11px] font-semibold uppercase px-2.5 py-0.5 rounded {% if s.is_active %}bg-emerald-950 text-emerald-300 border border-emerald-800{% else %}bg-slate-800 text-slate-400 border border-slate-700{% endif %}">
+                        {% if s.is_active %}<i class="fa-solid fa-circle-check mr-1"></i> Активен{% else %}<i class="fa-solid fa-ban mr-1"></i> Заблокирован{% endif %}
+                    </span>
+                    {% if s.department %}
+                    <span class="text-[10px] bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded font-mono">
+                        {{ s.department }}
+                    </span>
+                    {% endif %}
+                </div>
+
+                <!-- User Info -->
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-11 h-11 rounded-full bg-purple-950/80 border border-purple-800/80 text-purple-300 font-bold flex items-center justify-center text-sm uppercase shadow-inner">
+                        {{ s.name[:2] }}
+                    </div>
+                    <div>
+                        <h2 class="text-base font-bold text-white leading-snug">{{ s.name }}</h2>
+                        <div class="text-xs font-mono text-purple-400 flex items-center gap-1">
+                            <i class="fa-solid fa-terminal text-[10px] text-slate-500"></i>
+                            <span>{{ s.username }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Details block -->
+                <div class="space-y-2 text-xs text-slate-300 bg-slate-950/70 p-3.5 rounded-lg border border-slate-800/90 font-mono">
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-500">SSH Ключ:</span>
+                        {% if s.ssh_public_key %}
+                            <div class="flex items-center gap-1 text-emerald-400">
+                                <i class="fa-solid fa-key text-[10px]"></i>
+                                <span title="{{ s.ssh_public_key }}">{{ s.key_fingerprint_short() }}</span>
+                                <button type="button" onclick="copyText('{{ s.ssh_public_key|escape }}', this)" class="ml-1 text-slate-400 hover:text-white" title="Скопировать публичный ключ">
+                                    <i class="fa-regular fa-copy"></i>
+                                </button>
+                            </div>
+                        {% else %}
+                            <span class="text-slate-500">Не задан</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-500">Пароль (Win/SSH):</span>
+                        <span class="{% if s.encrypted_password %}text-emerald-400{% else %}text-slate-500{% endif %}">
+                            {% if s.encrypted_password %}Задан (AES){% else %}Не задан{% endif %}
+                        </span>
+                    </div>
+
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-500">Sudo права:</span>
+                        <span class="{% if s.sudo_enabled %}text-emerald-400 font-semibold{% else %}text-slate-400{% endif %}">
+                            {% if s.sudo_enabled %}<i class="fa-solid fa-check text-[10px] mr-0.5"></i> NOPASSWD{% else %}Обычный юзер{% endif %}
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Card Bottom Actions -->
+            <div class="mt-4 pt-4 border-t border-slate-800/80 flex justify-between items-center gap-2">
+                <a href="{{ url_for('user_ops_view') }}?staff_ids={{ s.id }}" class="text-xs text-purple-400 hover:text-purple-300 flex items-center gap-1 font-semibold">
+                    <i class="fa-solid fa-paper-plane text-[10px]"></i> Выдать доступ
+                </a>
+
+                <div class="flex items-center gap-2">
+                    <button type="button" onclick="openEditStaffModal('{{ s.id }}', '{{ s.name|escape }}', '{{ s.username|escape }}', '{{ s.department|default('', true)|escape }}', {{ 'true' if s.sudo_enabled else 'false' }}, {{ 'true' if s.is_active else 'false' }}, {{ 'true' if s.encrypted_password else 'false' }}, '{{ s.ssh_public_key|default('', true)|escape }}')"
+                            class="px-2.5 py-1.5 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 transition flex items-center gap-1">
+                        <i class="fa-solid fa-pen"></i>
+                    </button>
+                    <form action="{{ url_for('delete_staff', staff_id=s.id) }}" method="POST" onsubmit="return confirm('Удалить сотрудника «{{ s.name }}» из каталога?');" class="inline">
+                        <button type="submit" class="px-2.5 py-1.5 rounded text-xs bg-slate-800 hover:bg-red-950 hover:text-red-400 text-slate-400 transition" title="Удалить">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="col-span-full text-center py-12 bg-slate-900 border border-slate-800 rounded-xl text-slate-500 text-sm space-y-3">
+            <div class="text-4xl text-slate-600"><i class="fa-solid fa-users"></i></div>
+            <div class="font-semibold text-slate-300">В каталоге пока нет сотрудников</div>
+            <p class="text-xs text-slate-400 max-w-md mx-auto">Добавьте инженеров вашей команды с их открытыми SSH-ключами, чтобы выдавать или отзывать доступ на серверах в пару кликов.</p>
+            <button type="button" onclick="openCreateStaffModal()" class="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg transition inline-flex items-center gap-1.5">
+                <i class="fa-solid fa-plus"></i> Добавить первого сотрудника
+            </button>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Modal: Create Staff Member -->
+<div id="create-staff-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-xl w-full p-6 shadow-2xl space-y-4">
+        <div class="flex justify-between items-center pb-3 border-b border-slate-800">
+            <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-user-plus text-purple-400"></i> Новый профиль сотрудника
+            </h3>
+            <button onclick="closeCreateStaffModal()" class="text-slate-400 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <form method="POST" action="{{ url_for('create_staff') }}" class="space-y-4 text-xs">
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">ФИО сотрудника <span class="text-red-500">*</span></label>
+                    <input type="text" name="name" required placeholder="например: Иван Иванов"
+                           class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+                </div>
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Системный логин <span class="text-red-500">*</span></label>
+                    <input type="text" name="username" required placeholder="например: iivanov" pattern="[a-zA-Z0-9_\-\.]+"
+                           class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Отдел / Должность</label>
+                    <input type="text" name="department" placeholder="например: DevOps / Системный админ"
+                           class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+                </div>
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Пароль (для Windows / первичный вход)</label>
+                    <input type="password" name="password" placeholder="Оставьте пустым, если только SSH-ключ"
+                           class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-slate-300 font-semibold mb-1">Публичный SSH-ключ (OpenSSH)</label>
+                <textarea name="ssh_public_key" rows="3" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... или ssh-rsa AAAA..."
+                          class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-[11px]"></textarea>
+                <span class="text-[10px] text-slate-500">Вставьте строку публичного ключа (.pub) сотрудника.</span>
+            </div>
+
+            <div class="space-y-2 pt-2 border-t border-slate-800">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" name="sudo_enabled" value="1" checked class="rounded bg-slate-800 border-slate-700 text-purple-600">
+                    <span class="text-slate-300">Предоставлять права администратора (sudo NOPASSWD на Linux / Administrators на Windows)</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" name="is_active" value="1" checked class="rounded bg-slate-800 border-slate-700 text-purple-600">
+                    <span class="text-slate-300">Сотрудник активен (доступ разрешен к назначению)</span>
+                </label>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-4 border-t border-slate-800">
+                <button type="button" onclick="closeCreateStaffModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg cursor-pointer">Отмена</button>
+                <button type="submit" class="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-semibold rounded-lg cursor-pointer">Сохранить сотрудника</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Modal: Edit Staff Member -->
+<div id="edit-staff-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-xl w-full p-6 shadow-2xl space-y-4">
+        <div class="flex justify-between items-center pb-3 border-b border-slate-800">
+            <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-user-pen text-purple-400"></i> Редактирование сотрудника
+            </h3>
+            <button onclick="closeEditStaffModal()" class="text-slate-400 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <form id="edit-staff-form" method="POST" action="" class="space-y-4 text-xs">
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">ФИО сотрудника <span class="text-red-500">*</span></label>
+                    <input type="text" id="edit-staff-name" name="name" required
+                           class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+                </div>
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Системный логин <span class="text-red-500">*</span></label>
+                    <input type="text" id="edit-staff-username" name="username" required pattern="[a-zA-Z0-9_\-\.]+"
+                           class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono">
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Отдел / Должность</label>
+                    <input type="text" id="edit-staff-department" name="department"
+                           class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+                </div>
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Новый пароль (если меняется)</label>
+                    <input type="password" name="password" placeholder="Оставьте пустым, чтобы не изменять"
+                           class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-slate-300 font-semibold mb-1">Публичный SSH-ключ (OpenSSH)</label>
+                <textarea id="edit-staff-ssh-key" name="ssh_public_key" rows="3"
+                          class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono text-[11px]"></textarea>
+            </div>
+
+            <div class="space-y-2 pt-2 border-t border-slate-800">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="edit-staff-sudo" name="sudo_enabled" value="1" class="rounded bg-slate-800 border-slate-700 text-purple-600">
+                    <span class="text-slate-300">Предоставлять права администратора (sudo NOPASSWD / Administrators)</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="edit-staff-active" name="is_active" value="1" class="rounded bg-slate-800 border-slate-700 text-purple-600">
+                    <span class="text-slate-300">Сотрудник активен</span>
+                </label>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-4 border-t border-slate-800">
+                <button type="button" onclick="closeEditStaffModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg cursor-pointer">Отмена</button>
+                <button type="submit" class="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-semibold rounded-lg cursor-pointer">Сохранить изменения</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function openCreateStaffModal() {
+        document.getElementById('create-staff-modal').classList.remove('hidden');
+    }
+    function closeCreateStaffModal() {
+        document.getElementById('create-staff-modal').classList.add('hidden');
+    }
+
+    function openEditStaffModal(id, name, username, department, sudoEnabled, isActive, hasPassword, sshKey) {
+        document.getElementById('edit-staff-form').action = "/staff/" + id + "/edit";
+        document.getElementById('edit-staff-name').value = name;
+        document.getElementById('edit-staff-username').value = username;
+        document.getElementById('edit-staff-department').value = department;
+        document.getElementById('edit-staff-sudo').checked = sudoEnabled;
+        document.getElementById('edit-staff-active').checked = isActive;
+        document.getElementById('edit-staff-ssh-key').value = sshKey;
+        document.getElementById('edit-staff-modal').classList.remove('hidden');
+    }
+    function closeEditStaffModal() {
+        document.getElementById('edit-staff-modal').classList.add('hidden');
+    }
+
+    function copyText(text, btn) {
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(() => {
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i>';
+            setTimeout(() => { btn.innerHTML = orig; }, 1500);
+        }).catch(() => {
+            alert('Скопировано в буфер: ' + text);
+        });
+    }
+</script>
+{% endblock %}
