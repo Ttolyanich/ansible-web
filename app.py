@@ -501,11 +501,40 @@ def run_user_ops():
     query = Host.query.filter_by(is_enabled=True)
 
     if target_type == "preselected":
-        ids_json = request.form.get("selected_host_ids_json", "[]")
-        try:
-            ids_list = [int(i) for i in json.loads(ids_json) if str(i).isdigit()]
-        except Exception:
-            ids_list = []
+        ids_list = []
+        # Source 1: form getlist for 'host_ids' or 'selected_host_ids'
+        for val in request.form.getlist("host_ids") + request.form.getlist("selected_host_ids"):
+            if str(val).isdigit():
+                ids_list.append(int(val))
+
+        # Source 2: JSON format from 'selected_host_ids_json'
+        ids_json = request.form.get("selected_host_ids_json", "").strip()
+        if ids_json:
+            try:
+                parsed = json.loads(ids_json)
+                if isinstance(parsed, list):
+                    for i in parsed:
+                        if str(i).isdigit():
+                            ids_list.append(int(i))
+            except Exception:
+                # Fallback if quotes were stripped/mangled in HTML
+                cleaned = ids_json.replace("[", "").replace("]", "").replace('"', '').replace("'", "")
+                for chunk in cleaned.split(","):
+                    chunk = chunk.strip()
+                    if chunk.isdigit():
+                        ids_list.append(int(chunk))
+
+        # Source 3: CSV format from 'selected_host_ids_csv'
+        ids_csv = request.form.get("selected_host_ids_csv", "").strip()
+        if ids_csv:
+            for part in ids_csv.split(","):
+                part = part.strip()
+                if part.isdigit():
+                    ids_list.append(int(part))
+
+        # Deduplicate while preserving order
+        ids_list = list(dict.fromkeys(ids_list))
+
         if not ids_list:
             flash("Список выбранных хостов пуст.", "danger")
             return redirect(url_for("user_ops_view"))

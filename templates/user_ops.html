@@ -117,8 +117,12 @@
                     </select>
                 </div>
 
-                <!-- Preselected IDs hidden input -->
-                <input type="hidden" name="selected_host_ids_json" id="selected-host-ids-input" value="{{ selected_host_ids|tojson }}">
+                <!-- Preselected IDs hidden inputs (multi-level reliability) -->
+                {% for hid in selected_host_ids %}
+                <input type="hidden" name="host_ids" value="{{ hid }}">
+                {% endfor %}
+                <input type="hidden" name="selected_host_ids_json" id="selected-host-ids-input" value='{{ selected_host_ids|tojson }}'>
+                <input type="hidden" name="selected_host_ids_csv" value="{{ selected_host_ids|join(',') }}">
             </div>
         </div>
 
