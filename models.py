@@ -78,6 +78,7 @@ class StaffMember(db.Model):
     encrypted_password = db.Column(db.Text, nullable=True)
     sudo_enabled = db.Column(db.Boolean, default=True)
     department = db.Column(db.String(100), nullable=True)
+    is_system = db.Column(db.Boolean, default=False)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 

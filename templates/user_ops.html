@@ -1,4 +1,4 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 
 {% block title %}Управление учетными записями на серверах{% endblock %}
 
@@ -149,11 +149,20 @@
 
             <!-- SECTION A: Catalog Multi-Select -->
             <div id="catalog-section" class="{% if staff_members|length == 0 %}hidden{% endif %} space-y-4">
-                <div class="flex items-center justify-between text-xs bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
+                <div id="delete-protection-notice" class="hidden p-3 rounded-lg bg-amber-950/40 border border-amber-800/80 text-amber-300 text-xs flex items-center gap-2">
+                    <i class="fa-solid fa-shield-halved text-amber-400 text-sm"></i>
+                    <span><b>Защита от дурака:</b> Служебный аккаунт <code>ansible</code> заблокирован от удаления политикой безопасности.</span>
+                </div>
+
+                <div class="flex items-center justify-between text-xs bg-slate-950/60 p-3 rounded-lg border border-slate-800/80 flex-wrap gap-2">
                     <div class="text-slate-400">
                         Выберите сотрудников из списка ниже (можно выбрать сразу несколько):
                     </div>
                     <div class="flex items-center gap-2">
+                        <button type="button" onclick="selectOnlyAnsible()" class="text-xs text-amber-400 hover:text-amber-300 font-semibold transition flex items-center gap-1">
+                            <i class="fa-solid fa-robot"></i> Только ansible
+                        </button>
+                        <span class="text-slate-600">|</span>
                         <button type="button" onclick="selectAllStaff(true)" class="text-xs text-purple-400 hover:text-purple-300 font-semibold transition">
                             Выбрать всех
                         </button>
@@ -167,11 +176,12 @@
                 {% if staff_members %}
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[380px] overflow-y-auto pr-1">
                     {% for s in staff_members %}
-                    <label class="cursor-pointer block select-none">
+                    <label class="cursor-pointer block select-none staff-card-label" id="staff-card-{{ s.id }}" data-is-system="{{ 'true' if s.is_system or s.username == 'ansible' else 'false' }}">
                         <input type="checkbox" name="staff_ids" value="{{ s.id }}" data-name="{{ s.name }}" data-username="{{ s.username }}"
+                               data-is-system="{{ 'true' if s.is_system or s.username == 'ansible' else 'false' }}"
                                {% if s.id|string in selected_staff_ids %}checked{% endif %}
                                class="staff-checkbox sr-only peer" onchange="updateStaffCardSelection(this)">
-                        <div class="p-3.5 rounded-xl border border-slate-800 bg-slate-950/60 peer-checked:border-purple-500 peer-checked:bg-purple-950/20 hover:border-slate-700 transition flex items-start gap-3">
+                        <div class="p-3.5 rounded-xl border border-slate-800 bg-slate-950/60 peer-checked:border-purple-500 peer-checked:bg-purple-950/20 hover:border-slate-700 transition flex items-start gap-3 staff-card-inner">
                             <div class="w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 font-bold text-sm shrink-0 peer-checked:bg-purple-900 peer-checked:text-purple-200">
                                 {{ s.name[:1]|upper }}
                             </div>
@@ -184,6 +194,11 @@
                                     {{ s.department or 'Без отдела' }}
                                 </div>
                                 <div class="flex items-center gap-2 mt-2">
+                                    {% if s.is_system or s.username == 'ansible' %}
+                                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-950/90 text-purple-300 border border-purple-800 flex items-center gap-1 font-semibold">
+                                        <i class="fa-solid fa-lock text-[9px]"></i> Служебный
+                                    </span>
+                                    {% endif %}
                                     {% if s.ssh_public_key %}
                                     <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 flex items-center gap-1 font-mono">
                                         <i class="fa-solid fa-key text-[9px]"></i> SSH
@@ -301,20 +316,73 @@
         }
     }
 
+    function selectOnlyAnsible() {
+        // 1. Set operation to create
+        const createRadio = document.querySelector('input[name="operation"][value="create"]');
+        if (createRadio) {
+            createRadio.checked = true;
+            toggleOperationMode();
+        }
+
+        // 2. Set source mode to catalog
+        const catRadio = document.querySelector('input[name="source_mode"][value="catalog"]');
+        if (catRadio) {
+            catRadio.checked = true;
+            toggleSourceMode();
+        }
+
+        // 3. Uncheck all and select only ansible
+        document.querySelectorAll('.staff-checkbox').forEach(cb => { cb.checked = false; });
+        const ansibleCb = document.querySelector('.staff-checkbox[data-username="ansible"]');
+        if (ansibleCb) {
+            ansibleCb.checked = true;
+            const card = ansibleCb.closest('.staff-card-label');
+            if (card) {
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+    }
+
     function toggleOperationMode() {
         const op = document.querySelector('input[name="operation"]:checked').value;
         const createManualFields = document.getElementById('create-manual-fields');
         const submitBtn = document.getElementById('submit-btn');
         const submitText = document.getElementById('submit-btn-text');
+        const protectNotice = document.getElementById('delete-protection-notice');
 
         if (op === 'delete') {
             createManualFields.classList.add('hidden');
             submitBtn.className = "px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg shadow-lg shadow-red-950/50 transition flex items-center gap-2";
             submitText.innerText = "Запустить отзыв доступа / удаление";
+
+            if (protectNotice) protectNotice.classList.remove('hidden');
+
+            // Foolproof protection: disable all system accounts in catalog
+            document.querySelectorAll('.staff-checkbox[data-is-system="true"]').forEach(cb => {
+                cb.checked = false;
+                cb.disabled = true;
+                const label = cb.closest('.staff-card-label');
+                if (label) {
+                    label.classList.add('opacity-40', 'cursor-not-allowed');
+                    label.title = "Системный аккаунт ansible защищен от удаления политикой безопасности!";
+                }
+            });
         } else {
             createManualFields.classList.remove('hidden');
             submitBtn.className = "px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg shadow-lg shadow-purple-950/50 transition flex items-center gap-2";
             submitText.innerText = "Запустить создание доступа";
+
+            if (protectNotice) protectNotice.classList.add('hidden');
+
+            // Re-enable system accounts for creation
+            document.querySelectorAll('.staff-checkbox[data-is-system="true"]').forEach(cb => {
+                cb.disabled = false;
+                const label = cb.closest('.staff-card-label');
+                if (label) {
+                    label.classList.remove('opacity-40', 'cursor-not-allowed');
+                    label.title = "";
+                }
+            });
         }
     }
 
@@ -329,9 +397,14 @@
     }
 
     function selectAllStaff(state) {
+        const op = document.querySelector('input[name="operation"]:checked').value;
         const checkboxes = document.querySelectorAll('.staff-checkbox');
         checkboxes.forEach(cb => {
-            cb.checked = state;
+            if (op === 'delete' && cb.dataset.isSystem === 'true') {
+                cb.checked = false;
+            } else {
+                cb.checked = state;
+            }
         });
     }
 
@@ -351,6 +424,7 @@
     function confirmAction() {
         const op = document.querySelector('input[name="operation"]:checked').value;
         const sourceMode = document.querySelector('input[name="source_mode"]:checked').value;
+        const protectedList = ['ansible', 'root', 'admin', 'administrator', 'system'];
 
         if (sourceMode === 'catalog') {
             const checkedBoxes = Array.from(document.querySelectorAll('.staff-checkbox:checked'));
@@ -358,12 +432,20 @@
                 alert('Пожалуйста, выберите хотя бы одного сотрудника из списка!');
                 return false;
             }
-            const names = checkedBoxes.map(cb => cb.dataset.username || cb.dataset.name).slice(0, 5).join(', ');
-            const extra = checkedBoxes.length > 5 ? ` и еще ${checkedBoxes.length - 5}` : '';
 
             if (op === 'delete') {
+                const hasProtected = checkedBoxes.some(cb => protectedList.includes((cb.dataset.username || '').toLowerCase()) || cb.dataset.isSystem === 'true');
+                if (hasProtected) {
+                    alert('КРИТИЧЕСКАЯ ЗАЩИТА: Системный аккаунт ansible/root защищен от удаления!');
+                    return false;
+                }
+
+                const names = checkedBoxes.map(cb => cb.dataset.username || cb.dataset.name).slice(0, 5).join(', ');
+                const extra = checkedBoxes.length > 5 ? ` и еще ${checkedBoxes.length - 5}` : '';
                 return confirm(`ВНИМАНИЕ! Вы собираетесь ОТОЗВАТЬ ДОСТУП И УДАЛИТЬ (${checkedBoxes.length} чел.):\n[${names}${extra}]\nсо всех выбранных целевых серверов.\n\nПродолжить?`);
             } else {
+                const names = checkedBoxes.map(cb => cb.dataset.username || cb.dataset.name).slice(0, 5).join(', ');
+                const extra = checkedBoxes.length > 5 ? ` и еще ${checkedBoxes.length - 5}` : '';
                 return confirm(`Запустить создание учетных записей для (${checkedBoxes.length} чел.):\n[${names}${extra}]\nна выбранных целевых серверах?`);
             }
         } else {
@@ -375,6 +457,10 @@
             }
 
             if (op === 'delete') {
+                if (protectedList.includes(username.toLowerCase())) {
+                    alert(`КРИТИЧЕСКАЯ ЗАЩИТА: Пользователь "${username}" является защищенной системной учетной записью и НЕ МОЖЕТ быть удален с серверов!`);
+                    return false;
+                }
                 return confirm(`ВНИМАНИЕ! Вы собираетесь УДАЛИТЬ пользователя "${username}" с выбранных серверов.\nВсе процессы пользователя будут принудительно завершены.\n\nПродолжить?`);
             }
             return confirm(`Запустить создание пользователя "${username}" на целевых серверах?`);

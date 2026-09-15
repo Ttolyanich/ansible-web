@@ -1,4 +1,4 @@
-﻿---
+---
 - name: Remove Administrator Account on Linux & Windows
   hosts: all
   gather_facts: false
@@ -11,6 +11,13 @@
             target_users if (target_users is defined and target_users is iterable and target_users | length > 0)
             else [{'username': target_username}]
           }}
+
+    - name: "[Safety Policy] Guard against deleting protected system accounts"
+      ansible.builtin.assert:
+        that:
+          - item.username | lower not in ['ansible', 'root', 'admin', 'administrator', 'system']
+        fail_msg: "CRITICAL: Deletion of protected system user '{{ item.username }}' is strictly forbidden by safety policy!"
+      loop: "{{ effective_users }}"
 
     # -------------------------------------------------------------
     # LINUX TARGETS

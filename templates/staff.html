@@ -1,4 +1,4 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 
 {% block title %}Каталог сотрудников и ключей{% endblock %}
 
@@ -35,6 +35,11 @@
                     <span class="text-[11px] font-semibold uppercase px-2.5 py-0.5 rounded {% if s.is_active %}bg-emerald-950 text-emerald-300 border border-emerald-800{% else %}bg-slate-800 text-slate-400 border border-slate-700{% endif %}">
                         {% if s.is_active %}<i class="fa-solid fa-circle-check mr-1"></i> Активен{% else %}<i class="fa-solid fa-ban mr-1"></i> Заблокирован{% endif %}
                     </span>
+                    {% if s.is_system or s.username == 'ansible' %}
+                    <span class="text-[10px] bg-purple-950 text-purple-300 border border-purple-800 px-2 py-0.5 rounded font-semibold flex items-center gap-1">
+                        <i class="fa-solid fa-shield-halved text-[9px]"></i> Служебный
+                    </span>
+                    {% endif %}
                     {% if s.department %}
                     <span class="text-[10px] bg-slate-800 text-slate-300 border border-slate-700 px-2 py-0.5 rounded font-mono">
                         {{ s.department }}
@@ -63,10 +68,7 @@
                         {% if s.ssh_public_key %}
                             <div class="flex items-center gap-1 text-emerald-400">
                                 <i class="fa-solid fa-key text-[10px]"></i>
-                                <span title="{{ s.ssh_public_key }}">{{ s.key_fingerprint_short() }}</span>
-                                <button type="button" onclick="copyText('{{ s.ssh_public_key|escape }}', this)" class="ml-1 text-slate-400 hover:text-white" title="Скопировать публичный ключ">
-                                    <i class="fa-regular fa-copy"></i>
-                                </button>
+                                <span>{{ s.key_fingerprint_short() }}</span>
                             </div>
                         {% else %}
                             <span class="text-slate-500">Не задан</span>
@@ -96,15 +98,21 @@
                 </a>
 
                 <div class="flex items-center gap-2">
-                    <button type="button" onclick="openEditStaffModal('{{ s.id }}', '{{ s.name|escape }}', '{{ s.username|escape }}', '{{ s.department|default('', true)|escape }}', {{ 'true' if s.sudo_enabled else 'false' }}, {{ 'true' if s.is_active else 'false' }}, {{ 'true' if s.encrypted_password else 'false' }}, '{{ s.ssh_public_key|default('', true)|escape }}')"
-                            class="px-2.5 py-1.5 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 transition flex items-center gap-1">
+                    <button type="button" onclick="openEditStaffModal('{{ s.id }}', '{{ s.name|escape }}', '{{ s.username|escape }}', '{{ s.department|default('', true)|escape }}', {{ 'true' if s.sudo_enabled else 'false' }}, {{ 'true' if s.is_active else 'false' }}, {{ 'true' if s.encrypted_password else 'false' }}, '{{ s.ssh_public_key|default('', true)|escape }}', {{ 'true' if s.is_system or s.username == 'ansible' else 'false' }})"
+                            class="px-2.5 py-1.5 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 transition flex items-center gap-1" title="Редактировать">
                         <i class="fa-solid fa-pen"></i>
                     </button>
+                    {% if s.is_system or s.username == 'ansible' %}
+                    <span class="px-2.5 py-1.5 rounded text-xs bg-slate-800/40 text-slate-500 border border-slate-800 cursor-not-allowed flex items-center gap-1" title="Системный аккаунт ansible защищен от удаления">
+                        <i class="fa-solid fa-lock text-[10px]"></i>
+                    </span>
+                    {% else %}
                     <form action="{{ url_for('delete_staff', staff_id=s.id) }}" method="POST" onsubmit="return confirm('Удалить сотрудника «{{ s.name }}» из каталога?');" class="inline">
                         <button type="submit" class="px-2.5 py-1.5 rounded text-xs bg-slate-800 hover:bg-red-950 hover:text-red-400 text-slate-400 transition" title="Удалить">
                             <i class="fa-solid fa-trash-can"></i>
                         </button>
                     </form>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -256,10 +264,20 @@
         document.getElementById('create-staff-modal').classList.add('hidden');
     }
 
-    function openEditStaffModal(id, name, username, department, sudoEnabled, isActive, hasPassword, sshKey) {
+    function openEditStaffModal(id, name, username, department, sudoEnabled, isActive, hasPassword, sshKey, isSystem) {
         document.getElementById('edit-staff-form').action = "/staff/" + id + "/edit";
         document.getElementById('edit-staff-name').value = name;
-        document.getElementById('edit-staff-username').value = username;
+        const userInput = document.getElementById('edit-staff-username');
+        userInput.value = username;
+        if (isSystem) {
+            userInput.readOnly = true;
+            userInput.classList.add('opacity-60', 'cursor-not-allowed');
+            document.getElementById('edit-staff-sudo').disabled = true;
+        } else {
+            userInput.readOnly = false;
+            userInput.classList.remove('opacity-60', 'cursor-not-allowed');
+            document.getElementById('edit-staff-sudo').disabled = false;
+        }
         document.getElementById('edit-staff-department').value = department;
         document.getElementById('edit-staff-sudo').checked = sudoEnabled;
         document.getElementById('edit-staff-active').checked = isActive;

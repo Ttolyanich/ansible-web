@@ -51,6 +51,10 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# Safety policy: protected system accounts that can NEVER be deleted
+PROTECTED_USERNAMES = {"ansible", "root", "admin", "administrator", "system"}
+
+
 
 # -------------------------------------------------------------
 # Background Scheduler for Auto Zabbix Sync
@@ -351,12 +355,17 @@ def create_staff():
 def edit_staff(staff_id):
     staff = db.get_or_404(StaffMember, staff_id)
     name = request.form.get("name", "").strip()
-    username = request.form.get("username", "").strip()
+    username = request.form.get("username", "").strip().lower()
     department = request.form.get("department", "").strip()
     password = request.form.get("password", "").strip()
     ssh_public_key = request.form.get("ssh_public_key", "").strip()
     sudo_enabled = request.form.get("sudo_enabled") == "1"
     is_active = request.form.get("is_active") == "1"
+
+    if staff.is_system:
+        # Cannot change username or disable sudo for protected system account
+        username = staff.username
+        sudo_enabled = True
 
     if username and username != staff.username:
         existing = StaffMember.query.filter_by(username=username).first()
@@ -383,6 +392,10 @@ def edit_staff(staff_id):
 @admin_required
 def delete_staff(staff_id):
     staff = db.get_or_404(StaffMember, staff_id)
+    if staff.is_system or staff.username.lower() in PROTECTED_USERNAMES:
+        flash(f"Служебный системный аккаунт «{staff.username}» защищен от удаления политикой безопасности!", "danger")
+        return redirect(url_for("staff_view"))
+
     name = staff.name
     db.session.delete(staff)
     db.session.commit()
@@ -412,6 +425,11 @@ def user_ops_view():
     selected_staff_ids = request.args.getlist("staff_ids")
     if not selected_staff_ids and request.args.get("staff_ids"):
         selected_staff_ids = [request.args.get("staff_ids")]
+
+    if request.args.get("init_ansible") == "1":
+        ansible_staff = StaffMember.query.filter_by(username="ansible").first()
+        if ansible_staff:
+            selected_staff_ids = [str(ansible_staff.id)]
 
     return render_template(
         "user_ops.html",
@@ -469,6 +487,12 @@ def run_user_ops():
     if not target_users:
         flash("Список пользователей пуст.", "danger")
         return redirect(url_for("user_ops_view"))
+
+    if operation == "delete":
+        for u in target_users:
+            if u["username"].lower() in PROTECTED_USERNAMES:
+                flash(f"КРИТИЧЕСКАЯ ЗАЩИТА: Пользователь '{u['username']}' является защищенным системным аккаунтом и НЕ МОЖЕТ быть удален с серверов!", "danger")
+                return redirect(url_for("user_ops_view"))
 
     # Determine target hosts
     query = Host.query.filter_by(is_enabled=True)
@@ -893,10 +917,36 @@ def bootstrap_database():
                     if "is_os_manually_set" not in existing_cols:
                         conn.execute(db.text("ALTER TABLE hosts ADD COLUMN is_os_manually_set BOOLEAN DEFAULT 0"))
                     conn.commit()
+
+            if "staff_members" in inspector.get_table_names():
+                staff_cols = {col["name"] for col in inspector.get_columns("staff_members")}
+                with db.engine.connect() as conn:
+                    if "is_system" not in staff_cols:
+                        conn.execute(db.text("ALTER TABLE staff_members ADD COLUMN is_system BOOLEAN DEFAULT 0"))
+                    conn.commit()
         except Exception as e:
             print(f"[BOOTSTRAP] Migration notice: {e}")
 
-        # 1. Create Default Admin if no users exist
+        # 1. Ensure protected 'ansible' system service account exists in Staff catalog
+        try:
+            ansible_staff = StaffMember.query.filter_by(username="ansible").first()
+            if not ansible_staff:
+                ansible_staff = StaffMember(
+                    name="Служебная автоматизация Ansible",
+                    username="ansible",
+                    department="DevOps / Automation",
+                    sudo_enabled=True,
+                    is_system=True,
+                    is_active=True
+                )
+                db.session.add(ansible_staff)
+                db.session.commit()
+                print("[BOOTSTRAP] Created protected 'ansible' system account in Staff catalog.")
+        except Exception as e:
+            db.session.rollback()
+            print(f"[BOOTSTRAP] Staff check notice: {e}")
+
+        # 2. Create Default Admin if no users exist
         if User.query.count() == 0:
             admin = User(username="admin", role="admin")
             admin.set_password("admin")

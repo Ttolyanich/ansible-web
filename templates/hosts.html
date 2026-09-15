@@ -22,11 +22,15 @@
             </form>
             <button type="button" onclick="submitBatchAction('ping')" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5">
                 <i class="fa-solid fa-bolt"></i>
-                <span>Ping выбранных (<span id="selected-count-ping">0</span>)</span>
+                <span>Ping (<span id="selected-count-ping">0</span>)</span>
+            </button>
+            <button type="button" onclick="submitBatchAction('ansible_init')" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5" title="Развернуть системного пользователя ansible на выбранных серверах">
+                <i class="fa-solid fa-robot text-amber-300"></i>
+                <span>Ansible (<span id="selected-count-ansible">0</span>)</span>
             </button>
             <button type="button" onclick="submitBatchAction('user_ops')" class="px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5">
                 <i class="fa-solid fa-user-gear"></i>
-                <span>Учетки на выбранных (<span id="selected-count-user">0</span>)</span>
+                <span>Учетки (<span id="selected-count-user">0</span>)</span>
             </button>
         </div>
     </div>
@@ -218,12 +222,14 @@
     const checkboxes = document.querySelectorAll('.host-checkbox');
     const countPing = document.getElementById('selected-count-ping');
     const countUser = document.getElementById('selected-count-user');
+    const countAnsible = document.getElementById('selected-count-ansible');
 
     function updateCount() {
         let count = 0;
         checkboxes.forEach(cb => { if (cb.checked) count++; });
-        countPing.innerText = count;
-        countUser.innerText = count;
+        if (countPing) countPing.innerText = count;
+        if (countUser) countUser.innerText = count;
+        if (countAnsible) countAnsible.innerText = count;
     }
 
     if (selectAll) {
@@ -248,6 +254,10 @@
         if (type === 'ping') {
             if (!confirm(`Запустить быструю проверку SSH для ${checked.length} хостов?`)) return;
             form.action = "{{ url_for('run_ping_batch') }}";
+            form.submit();
+        } else if (type === 'ansible_init') {
+            form.action = "{{ url_for('user_ops_view') }}?init_ansible=1";
+            form.method = "POST";
             form.submit();
         } else if (type === 'user_ops') {
             form.action = "{{ url_for('user_ops_view') }}";

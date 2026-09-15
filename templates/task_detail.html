@@ -149,8 +149,7 @@
     const isRunning = "{{ task.status }}" === "running" || "{{ task.status }}" === "pending";
 
     if (isRunning) {
-        // Poll every 1.5 seconds for live output and completion
-        const intervalId = setInterval(async () => {
+        async function fetchTaskUpdate() {
             try {
                 const resp = await fetch("{{ url_for('api_task_status', task_id=task.id) }}");
                 if (resp.ok) {
@@ -177,7 +176,11 @@
             } catch (err) {
                 console.error("Polling error:", err);
             }
-        }, 1500);
+        }
+
+        // Trigger immediate fetch, then poll every 1 second
+        fetchTaskUpdate();
+        const intervalId = setInterval(fetchTaskUpdate, 1000);
     }
 
     function copyLogs() {

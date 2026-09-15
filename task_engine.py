@@ -265,13 +265,20 @@ def normalize_private_key(raw_key: Optional[str]) -> str:
     return "\n".join(clean_lines) + "\n"
 
 
+_key_validation_cache: Dict[Tuple[str, str], Tuple[bool, str]] = {}
+
 def validate_ssh_key(raw_key: str, passphrase: str = "") -> Tuple[bool, str]:
     """
     Validates private key format and checks if passphrase is required.
+    Cached for lightning-fast batch processing across hundreds of hosts.
     Returns (True, "") if valid, or (False, user_friendly_error_message).
     """
     if not raw_key or not raw_key.strip():
         return True, ""
+
+    cache_key = (raw_key.strip(), (passphrase or "").strip())
+    if cache_key in _key_validation_cache:
+        return _key_validation_cache[cache_key]
 
     clean = raw_key.strip()
 
@@ -331,19 +338,29 @@ def validate_ssh_key(raw_key: str, passphrase: str = "") -> Tuple[bool, str]:
 
         if not loaded:
             # Check if key is encrypted and requires a passphrase
-            is_encrypted = ("ENCRYPTED" in clean or "Proc-Type: 4,ENCRYPTED" in clean)
-            if is_encrypted and not pass_bytes:
-                return False, "Приватный ключ защищён парольной фразой! Пожалуйста, укажите 'Парольную фразу ключа' в поле профиля."
+                is_encrypted = ("ENCRYPTED" in clean or "Proc-Type: 4,ENCRYPTED" in clean)
+                if is_encrypted and not pass_bytes:
+                    res = (False, "Приватный ключ защищён парольной фразой! Пожалуйста, укажите 'Парольную фразу ключа' в поле профиля.")
+                    _key_validation_cache[cache_key] = res
+                    return res
 
-            if pass_bytes:
-                return False, "Не удалось расшифровать приватный ключ. Проверьте правильность введённой парольной фразы."
+                if pass_bytes:
+                    res = (False, "Не удалось расшифровать приватный ключ. Проверьте правильность введённой парольной фразы.")
+                    _key_validation_cache[cache_key] = res
+                    return res
 
-            return False, "Не удалось распознать формат приватного ключа. Убедитесь, что скопирован весь блок от BEGIN до END."
+                res = (False, "Не удалось распознать формат приватного ключа. Убедитесь, что скопирован весь блок от BEGIN до END.")
+                _key_validation_cache[cache_key] = res
+                return res
 
     except Exception as ex:
-        return False, f"Ошибка валидации ключа: {ex}"
+        res = (False, f"Ошибка валидации ключа: {ex}")
+        _key_validation_cache[cache_key] = res
+        return res
 
-    return True, ""
+    res = (True, "")
+    _key_validation_cache[cache_key] = res
+    return res
 
 
 def write_clean_key_file(key_text: str, passphrase: str, target_file: str) -> bool:
@@ -490,8 +507,16 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
         # Handle Private Key vs Password
         use_key = False
         if creds.get("auth_type") == "key" and creds.get("private_key"):
-            key_file = os.path.join(keys_dir, f"key_{host.id}_{abs(hash(creds['user'])) % 10000}")
-            if write_clean_key_file(creds.get("private_key", ""), creds.get("passphrase", ""), key_file):
+            prof_id = creds.get("profile_id")
+            if prof_id:
+                key_file = os.path.join(keys_dir, f"key_prof_{prof_id}")
+            else:
+                key_file = os.path.join(keys_dir, f"key_custom_{abs(hash(creds.get('private_key', ''))) % 100000}")
+
+            if not os.path.exists(key_file):
+                write_clean_key_file(creds.get("private_key", ""), creds.get("passphrase", ""), key_file)
+
+            if os.path.exists(key_file):
                 host_vars["ansible_ssh_private_key_file"] = key_file
                 host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes -o PubkeyAcceptedKeyTypes=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o PubkeyAcceptedAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519 -o HostKeyAlgorithms=+ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-ed25519"
                 if creds.get("passphrase"):
@@ -502,8 +527,16 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
             if creds.get("password"):
                 host_vars["ansible_password"] = creds["password"]
             elif creds.get("private_key"):
-                key_file = os.path.join(keys_dir, f"key_{host.id}_{abs(hash(creds['user'])) % 10000}")
-                if write_clean_key_file(creds.get("private_key", ""), creds.get("passphrase", ""), key_file):
+                prof_id = creds.get("profile_id")
+                if prof_id:
+                    key_file = os.path.join(keys_dir, f"key_prof_{prof_id}")
+                else:
+                    key_file = os.path.join(keys_dir, f"key_custom_{abs(hash(creds.get('private_key', ''))) % 100000}")
+
+                if not os.path.exists(key_file):
+                    write_clean_key_file(creds.get("private_key", ""), creds.get("passphrase", ""), key_file)
+
+                if os.path.exists(key_file):
                     host_vars["ansible_ssh_private_key_file"] = key_file
                     host_vars["ansible_ssh_common_args"] += " -o BatchMode=yes -o IdentitiesOnly=yes"
 
@@ -630,10 +663,14 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
         if not task:
             return
 
-        task.status = "running"
-        db.session.commit()
-
         hosts = Host.query.filter(Host.id.in_(host_ids)).all()
+        task.status = "running"
+        task.log_output = f"[СИСТЕМА] Подготовка задачи для {len(hosts)} серверов...\n"
+        try:
+            db.session.commit()
+        except Exception:
+            pass
+
         if not hosts:
             task.status = "failed"
             task.log_output = "No hosts selected for execution."
@@ -704,6 +741,8 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                     openssl_cfg = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
                     if os.path.exists(openssl_cfg):
                         env["OPENSSL_CONF"] = openssl_cfg
+                    env["PYTHONUNBUFFERED"] = "1"
+                    env["ANSIBLE_FORCE_COLOR"] = "0"
                     env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
                     env["ANSIBLE_RETRY_FILES_ENABLED"] = "False"
                     env["ANSIBLE_STDOUT_CALLBACK"] = "default"
@@ -732,15 +771,6 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
 
                     try:
                         while True:
-                            # Check if task was canceled externally
-                            try:
-                                db.session.refresh(task)
-                                if task.status == "canceled":
-                                    proc.terminate()
-                                    break
-                            except Exception:
-                                pass
-
                             line = proc.stdout.readline()
                             if not line and proc.poll() is not None:
                                 break
@@ -748,13 +778,23 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                                 pass_chunks.append(line)
 
                             now = time.time()
-                            if (now - last_flush) >= 1.0 and pass_chunks:
-                                task.log_output = "".join(aggregated_logs) + "".join(pass_chunks)
+                            if (now - last_flush) >= 0.8:
+                                # Periodic check for task cancellation and DB flush
                                 try:
-                                    db.session.commit()
-                                    last_flush = now
+                                    db.session.refresh(task)
+                                    if task.status == "canceled":
+                                        proc.terminate()
+                                        break
                                 except Exception:
-                                    db.session.rollback()
+                                    pass
+
+                                if pass_chunks:
+                                    task.log_output = "".join(aggregated_logs) + "".join(pass_chunks)
+                                    try:
+                                        db.session.commit()
+                                        last_flush = now
+                                    except Exception:
+                                        db.session.rollback()
 
                         proc.stdout.close()
                         proc.wait(timeout=5)
