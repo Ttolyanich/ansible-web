@@ -107,14 +107,32 @@
                     </select>
                 </div>
 
-                <!-- OS Filter -->
-                <div>
-                    <label class="block text-xs font-semibold text-slate-300 mb-1">Ограничить по типу ОС (опционально)</label>
-                    <select name="target_os" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm focus:ring-1 focus:ring-red-500">
-                        <option value="all">Все ОС (и Linux, и Windows)</option>
-                        <option value="linux">Только Linux хосты</option>
-                        <option value="windows">Только Windows хосты</option>
-                    </select>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <!-- OS Filter -->
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Ограничить по типу ОС:</label>
+                        <select name="target_os" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm focus:ring-1 focus:ring-red-500">
+                            <option value="all">Все ОС (и Linux, и Windows)</option>
+                            <option value="linux">Только Linux хосты</option>
+                            <option value="windows">Только Windows хосты</option>
+                        </select>
+                    </div>
+
+                    <!-- Credential Profile Selector -->
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5">
+                            <i class="fa-solid fa-key text-amber-400"></i>
+                            <span>Профиль подключения к серверам:</span>
+                        </label>
+                        <select name="credential_profile_id" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-sm focus:ring-1 focus:ring-red-500 font-mono text-xs">
+                            <option value="">⚙️ Авто (по умолчанию в системе / для хоста)</option>
+                            {% for cp in credential_profiles %}
+                            <option value="{{ cp.id }}">
+                                [{{ cp.os_type|upper }}] {{ cp.name }} (пользователь: {{ cp.ssh_user }}){% if cp.is_default %} ★ По умолчанию{% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
                 </div>
 
                 <!-- Preselected IDs hidden inputs (multi-level reliability) -->

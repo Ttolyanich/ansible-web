@@ -434,6 +434,8 @@ def user_ops_view():
         if ansible_staff:
             selected_staff_ids = [str(ansible_staff.id)]
 
+    credential_profiles = CredentialProfile.query.order_by(CredentialProfile.os_type, CredentialProfile.is_default.desc(), CredentialProfile.name).all()
+
     return render_template(
         "user_ops.html",
         groups=groups,
@@ -441,7 +443,8 @@ def user_ops_view():
         selected_host_ids=selected_host_ids,
         selected_group_id=request.args.get("group_id", ""),
         staff_members=staff_members,
-        selected_staff_ids=selected_staff_ids
+        selected_staff_ids=selected_staff_ids,
+        credential_profiles=credential_profiles
     )
 
 @app.route("/user-ops/run", methods=["POST"])
@@ -580,6 +583,10 @@ def run_user_ops():
         }
         summary = f"Отзыв доступа / удаление [{usernames_preview}] ({len(target_users)} чел.) с {len(host_ids)} серверов"
         task_type = "user_delete"
+
+    cred_profile_id = request.form.get("credential_profile_id")
+    if cred_profile_id and cred_profile_id.isdigit():
+        extra_vars["_credential_profile_id"] = int(cred_profile_id)
 
     task_id = dispatch_task(
         app=app,
@@ -863,6 +870,7 @@ def playbook_run(filename):
     meta = get_playbook_meta(clean_filename)
     all_hosts = Host.query.order_by(Host.name.asc()).all()
     groups = HostGroup.query.order_by(HostGroup.name.asc()).all()
+    credential_profiles = CredentialProfile.query.order_by(CredentialProfile.os_type, CredentialProfile.is_default.desc(), CredentialProfile.name).all()
 
     return render_template(
         "playbook_run.html",
@@ -872,7 +880,8 @@ def playbook_run(filename):
         playbook_description=meta["description"],
         tasks_count=meta["tasks_count"],
         all_hosts=all_hosts,
-        groups=groups
+        groups=groups,
+        credential_profiles=credential_profiles
     )
 
 
@@ -903,6 +912,10 @@ def playbook_run_post(filename):
             except Exception as e:
                 flash(f"Ошибка в формате дополнительных переменных: {e}", "danger")
                 return redirect(url_for("playbook_run", filename=clean_filename))
+
+    cred_profile_id = request.form.get("credential_profile_id")
+    if cred_profile_id and cred_profile_id.isdigit():
+        extra_vars["_credential_profile_id"] = int(cred_profile_id)
 
     query = Host.query
     if target_type == "preselected":
@@ -1260,6 +1273,19 @@ def delete_credential(profile_id):
     db.session.commit()
     flash(f"Профиль «{profile.name}» удален.", "info")
     return redirect(url_for("credentials_view"))
+
+
+@app.route("/credentials/<int:profile_id>/set-default", methods=["POST"])
+@login_required
+@admin_required
+def set_default_credential(profile_id):
+    profile = db.get_or_404(CredentialProfile, profile_id)
+    CredentialProfile.query.filter_by(os_type=profile.os_type, is_default=True).update({"is_default": False})
+    profile.is_default = True
+    db.session.commit()
+    flash(f"Профиль «{profile.name}» (пользователь: {profile.ssh_user}) назначен профилем по умолчанию для {profile.os_type.upper()}.", "success")
+    return redirect(url_for("credentials_view"))
+
 
 
 # -------------------------------------------------------------

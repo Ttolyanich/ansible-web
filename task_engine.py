@@ -140,10 +140,11 @@ def resolve_credentials(host, db_session) -> Dict[str, Any]:
     return creds
 
 
-def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
+def get_candidate_credentials(host, db_session, explicit_profile_id: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Returns an ordered list of candidate credential dictionaries to try for this host.
     Prioritizes:
+    0. Explicit profile passed for this task run (if specified)
     1. Assigned host profile (if set)
     2. Assigned group profile (if set)
     3. Default profile for host's OS
@@ -155,6 +156,13 @@ def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
     target_os = host.os_type if host.os_type in ("linux", "windows") else "linux"
     profiles_to_try = []
 
+    # 0. Explicit profile passed for this specific task
+    explicit_profile = None
+    if explicit_profile_id:
+        explicit_profile = db_session.get(CredentialProfile, explicit_profile_id)
+        if explicit_profile:
+            profiles_to_try.append(explicit_profile)
+
     # 1. Primary profile
     primary_profile = None
     if host.override_credential:
@@ -164,7 +172,7 @@ def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
     else:
         primary_profile = CredentialProfile.query.filter_by(os_type=target_os, is_default=True).first()
 
-    if primary_profile:
+    if primary_profile and (not explicit_profile or primary_profile.id != explicit_profile.id):
         profiles_to_try.append(primary_profile)
 
     # 2. All other profiles matching target_os
@@ -173,6 +181,8 @@ def get_candidate_credentials(host, db_session) -> List[Dict[str, Any]]:
         CredentialProfile.id
     ).all()
     for p in other_profiles:
+        if explicit_profile and p.id == explicit_profile.id:
+            continue
         if primary_profile and p.id == primary_profile.id:
             continue
         profiles_to_try.append(p)
@@ -678,8 +688,28 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
             db.session.commit()
             return
 
+        # Determine if an explicit credential profile was specified for this task run
+        explicit_cred_id = extra_vars.get("_credential_profile_id")
+        if not explicit_cred_id and task.filter_info:
+            try:
+                meta = json.loads(task.filter_info)
+                explicit_cred_id = meta.get("extra_vars", {}).get("_credential_profile_id") or meta.get("credential_profile_id")
+            except Exception:
+                pass
+
+        try:
+            explicit_cred_id = int(explicit_cred_id) if explicit_cred_id else None
+        except Exception:
+            explicit_cred_id = None
+
+        if explicit_cred_id:
+            from models import CredentialProfile
+            exp_p = db.session.get(CredentialProfile, explicit_cred_id)
+            if exp_p:
+                task.log_output += f"[ПРОФИЛЬ] Назначен приоритетный профиль подключения: «{exp_p.name}» (пользователь: {exp_p.ssh_user})\n"
+
         # Precompute candidate credential sequences for each host
-        host_candidates = {h.name: get_candidate_credentials(h, db.session) for h in hosts}
+        host_candidates = {h.name: get_candidate_credentials(h, db.session, explicit_profile_id=explicit_cred_id) for h in hosts}
         pending_hosts = {h.name: h for h in hosts}
         host_attempt_indices = {h.name: 0 for h in hosts}
         final_results = {}

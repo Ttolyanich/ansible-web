@@ -132,15 +132,34 @@
                 </div>
             </div>
 
-            <!-- OS Filter -->
-            <div class="pt-2 border-t border-slate-800/80">
-                <label class="block text-xs font-semibold text-slate-300 mb-1.5">Фильтр по операционной системе (опционально):</label>
-                <select name="target_os" class="w-full sm:w-72 px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-2 focus:ring-red-500 focus:outline-none">
-                    <option value="all">Все ОС (Linux и Windows)</option>
-                    <option value="linux" selected>Только Linux серверы</option>
-                    <option value="windows">Только Windows серверы</option>
-                </select>
+            <!-- OS Filter & Credential Profile -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-800/80">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1.5">Фильтр по операционной системе:</label>
+                    <select name="target_os" class="w-full px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-2 focus:ring-red-500 focus:outline-none">
+                        <option value="all">Все ОС (Linux и Windows)</option>
+                        <option value="linux" selected>Только Linux серверы</option>
+                        <option value="windows">Только Windows серверы</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                        <i class="fa-solid fa-key text-amber-400"></i>
+                        <span>Профиль подключения SSH:</span>
+                    </label>
+                    <select name="credential_profile_id" class="w-full px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-2 focus:ring-red-500 focus:outline-none font-mono">
+                        <option value="">⚙️ Авто (по умолчанию в системе / для хоста)</option>
+                        {% for cp in credential_profiles %}
+                        <option value="{{ cp.id }}">
+                            [{{ cp.os_type|upper }}] {{ cp.name }} (пользователь: {{ cp.ssh_user }}){% if cp.is_default %} ★ По умолчанию{% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
+            <p class="text-[11px] text-slate-500">
+                * Если выбран конкретный профиль (например, <b>ansible</b>), Ansible будет подключаться именно под ним в первую очередь, минуя root.
+            </p>
         </div>
 
         <!-- STEP 2: Extra Variables (extra_vars) -->
