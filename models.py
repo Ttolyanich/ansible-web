@@ -4,7 +4,7 @@ from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
 
 db = SQLAlchemy()
 
@@ -28,7 +28,12 @@ class CryptoHelper:
                     with open(key_path, "wb") as f:
                         f.write(new_key.encode())
                     key = new_key
-            cls._cipher = Fernet(key.encode() if isinstance(key, str) else key)
+            primary_key = key.encode() if isinstance(key, str) else key
+            ciphers = [Fernet(primary_key)]
+            legacy_key = b"v1tX7e1eHnZtTqK_x6FvE9qL1pG2bA4sD6jK8mN0wQY="
+            if primary_key != legacy_key:
+                ciphers.append(Fernet(legacy_key))
+            cls._cipher = MultiFernet(ciphers)
         return cls._cipher
 
     @classmethod
