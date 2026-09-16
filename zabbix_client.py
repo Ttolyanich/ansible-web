@@ -37,12 +37,6 @@ def extract_vpn_ip_from_comment(comment: Optional[str]) -> Optional[str]:
         if not ip.startswith(("127.", "0.", "255.")):
             return ip
 
-    # 2. General search for any IPv4 address in comment
-    all_ips = re.findall(IPV4_REGEX, comment)
-    for ip in all_ips:
-        if not ip.startswith(("127.", "0.", "255.")):
-            return ip
-
     return None
 
 

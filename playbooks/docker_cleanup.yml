@@ -11,9 +11,9 @@
       changed_when: false
       failed_when: false
 
-    - name: Clean up unused Docker resources
+    - name: Clean up unused Docker resources (containers, networks, dangling images)
       when: docker_check.rc == 0
-      ansible.builtin.raw: docker system prune -f --volumes
+      ansible.builtin.raw: docker system prune -f
       register: docker_prune_res
 
     - name: Check Docker disk usage after prune

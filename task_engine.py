@@ -817,7 +817,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
             return text
 
         pass_num = 1
-        max_passes = 6
+        max_passes = int(os.getenv("MAX_AUTH_PASSES", "2"))
         forks = int(os.getenv("ANSIBLE_FORKS", "100"))
         ssh_timeout = int(os.getenv("ANSIBLE_TIMEOUT", "15"))
         playbook_timeout = int(os.getenv("ANSIBLE_TASK_TIMEOUT", "900"))

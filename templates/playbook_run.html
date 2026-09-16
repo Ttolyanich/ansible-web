@@ -50,6 +50,7 @@
 
     <!-- Execution Form -->
     <form action="{{ url_for('playbook_run_post', filename=filename) }}" method="POST" id="run-form" onsubmit="return confirmLaunch()" class="space-y-5">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <!-- STEP 1: Target Hosts Selection -->
         <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl space-y-4">
             <h2 class="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">

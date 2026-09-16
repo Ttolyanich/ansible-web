@@ -27,6 +27,10 @@ class CryptoHelper:
                     new_key = Fernet.generate_key().decode()
                     with open(key_path, "wb") as f:
                         f.write(new_key.encode())
+                    try:
+                        os.chmod(key_path, 0o600)
+                    except Exception:
+                        pass
                     key = new_key
             primary_key = key.encode() if isinstance(key, str) else key
             ciphers = [Fernet(primary_key)]

@@ -25,6 +25,7 @@
 
     <!-- Main Wizard Form -->
     <form method="POST" action="{{ url_for('run_user_ops') }}" class="space-y-6" onsubmit="return confirmAction();">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <!-- Step 1: Operation Mode -->
         <div class="bg-slate-900 border border-slate-800 p-6 rounded-xl">
             <h2 class="text-sm font-bold text-white uppercase tracking-wider mb-4 flex items-center gap-2">

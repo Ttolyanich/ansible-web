@@ -41,19 +41,19 @@
 
     <!-- Tabs for Servers vs Equipment -->
     <div class="flex items-center gap-2 border-b border-slate-800 pb-3 flex-wrap">
-        <a href="{{ url_for('hosts_view', tab='servers', q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status) }}" 
+        <a href="{{ url_for('hosts_view', tab='servers', q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
            class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'servers' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
             <i class="fa-solid fa-server"></i>
             <span>Серверы (SSH)</span>
             <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-950/60 font-mono">{{ count_servers }}</span>
         </a>
-        <a href="{{ url_for('hosts_view', tab='equipment', q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status) }}" 
+        <a href="{{ url_for('hosts_view', tab='equipment', q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
            class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'equipment' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
             <i class="fa-solid fa-microchip"></i>
             <span>Оборудование (iDRAC / NAS / ИБП)</span>
             <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-950/60 font-mono">{{ count_equipment }}</span>
         </a>
-        <a href="{{ url_for('hosts_view', tab='all', q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status) }}" 
+        <a href="{{ url_for('hosts_view', tab='all', q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
            class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'all' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
             <i class="fa-solid fa-list"></i>
             <span>Все хосты</span>
@@ -65,6 +65,7 @@
     <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
         <form method="GET" action="{{ url_for('hosts_view') }}" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
             <input type="hidden" name="tab" value="{{ tab }}">
+            <input type="hidden" name="per_page" value="{{ per_page }}">
             <!-- Search Query -->
             <div>
                 <label class="block text-slate-400 font-semibold mb-1">Поиск</label>
@@ -120,6 +121,7 @@
 
     <!-- Hosts Table -->
     <form id="batch-form" method="POST" action="">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action_type" id="form-action-type" value="">
         <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
             <div class="overflow-x-auto">
@@ -266,6 +268,83 @@
                     </tbody>
                 </table>
             </div>
+
+            {% if (pagination and pagination.pages > 1) or per_page == 'all' or (pagination and pagination.total > 25) %}
+            <div class="px-4 py-3 bg-slate-950/60 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-400">
+                <!-- Info & Per-Page selector -->
+                <div class="flex items-center gap-3 flex-wrap">
+                    {% if pagination %}
+                    <span>
+                        Показано <strong class="text-white">{{ ((pagination.page - 1) * pagination.per_page) + 1 }}</strong>–<strong class="text-white">{{ [pagination.page * pagination.per_page, pagination.total]|min }}</strong> из <strong class="text-white">{{ pagination.total }}</strong>
+                    </span>
+                    {% else %}
+                    <span>
+                        Всего серверов: <strong class="text-white">{{ hosts|length }}</strong>
+                    </span>
+                    {% endif %}
+                    
+                    <span class="text-slate-600">|</span>
+                    
+                    <div class="flex items-center gap-1.5">
+                        <span>На странице:</span>
+                        {% for n in [25, 50, 100, 200] %}
+                        <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=n, page=1) }}"
+                           class="px-2 py-0.5 rounded {% if per_page|string == n|string or ((not per_page or per_page is not defined) and n == 50) %}bg-red-600 text-white font-semibold{% else %}bg-slate-800 hover:bg-slate-700 text-slate-300{% endif %} transition">
+                            {{ n }}
+                        </a>
+                        {% endfor %}
+                        <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page='all') }}"
+                           class="px-2 py-0.5 rounded {% if per_page == 'all' %}bg-red-600 text-white font-semibold{% else %}bg-slate-800 hover:bg-slate-700 text-slate-300{% endif %} transition">
+                            Все
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Page navigation buttons -->
+                {% if pagination and pagination.pages > 1 %}
+                <div class="flex items-center gap-1">
+                    {% if pagination.has_prev %}
+                    <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page, page=pagination.prev_num) }}"
+                       class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition" title="Предыдущая">
+                        <i class="fa-solid fa-chevron-left text-[10px]"></i>
+                    </a>
+                    {% else %}
+                    <span class="px-2.5 py-1 rounded bg-slate-900/50 text-slate-600 cursor-not-allowed">
+                        <i class="fa-solid fa-chevron-left text-[10px]"></i>
+                    </span>
+                    {% endif %}
+
+                    {% for p in pagination.iter_pages(left_edge=1, left_current=2, right_current=2, right_edge=1) %}
+                        {% if p %}
+                            {% if p == pagination.page %}
+                            <span class="px-2.5 py-1 rounded bg-red-600 text-white font-semibold shadow-sm">
+                                {{ p }}
+                            </span>
+                            {% else %}
+                            <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page, page=p) }}"
+                               class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+                                {{ p }}
+                            </a>
+                            {% endif %}
+                        {% else %}
+                        <span class="px-1.5 text-slate-600">...</span>
+                        {% endif %}
+                    {% endfor %}
+
+                    {% if pagination.has_next %}
+                    <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page, page=pagination.next_num) }}"
+                       class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition" title="Следующая">
+                        <i class="fa-solid fa-chevron-right text-[10px]"></i>
+                    </a>
+                    {% else %}
+                    <span class="px-2.5 py-1 rounded bg-slate-900/50 text-slate-600 cursor-not-allowed">
+                        <i class="fa-solid fa-chevron-right text-[10px]"></i>
+                    </span>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
     </form>
 </div>
@@ -282,6 +361,7 @@
         </div>
 
         <form method="POST" action="{{ url_for('create_host_manual') }}" class="space-y-4 text-xs">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div class="sm:col-span-2">
                     <label class="block text-slate-300 font-semibold mb-1">Имя сервера (Hostname) <span class="text-red-500">*</span></label>

@@ -4,9 +4,11 @@ import re
 from datetime import datetime, timedelta
 from functools import wraps
 import yaml
-from sqlalchemy import text
+from sqlalchemy import text, event
+from sqlalchemy.orm import joinedload
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, abort, send_from_directory
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from flask_wtf.csrf import CSRFProtect
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -34,6 +36,20 @@ app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db.init_app(app)
+
+with app.app_context():
+    @event.listens_for(db.engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        try:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA busy_timeout=30000")
+            cursor.close()
+        except Exception:
+            pass
+
+csrf = CSRFProtect(app)
 
 login_manager = LoginManager()
 login_manager.login_view = "login"
@@ -194,13 +210,36 @@ def hosts_view():
     if filter_status:
         query = query.filter_by(last_status=filter_status)
 
-    hosts = query.order_by(Host.name).all()
+    query = query.options(
+        joinedload(Host.group),
+        joinedload(Host.override_credential)
+    )
+
+    page = request.args.get("page", 1, type=int)
+    per_page_raw = request.args.get("per_page", "50").strip()
+    show_all = per_page_raw == "all"
+
+    if show_all:
+        hosts = query.order_by(Host.name).all()
+        pagination = None
+    else:
+        try:
+            per_page = int(per_page_raw)
+            if per_page not in (25, 50, 100, 200, 500):
+                per_page = 50
+        except ValueError:
+            per_page = 50
+        pagination = query.order_by(Host.name).paginate(page=page, per_page=per_page, error_out=False)
+        hosts = pagination.items
+
     groups = HostGroup.query.order_by(HostGroup.name).all()
     credential_profiles = CredentialProfile.query.order_by(CredentialProfile.name).all()
 
     return render_template(
         "hosts.html",
         hosts=hosts,
+        pagination=pagination,
+        per_page=per_page_raw,
         groups=groups,
         credential_profiles=credential_profiles,
         tab=tab,
@@ -524,6 +563,10 @@ def create_staff():
         flash("ФИО и системный логин обязательны для заполнения.", "danger")
         return redirect(url_for("staff_view"))
 
+    if not re.match(r"^[a-zA-Z0-9_.-]{1,64}$", username):
+        flash("Логин содержит недопустимые символы. Разрешены только латинские буквы, цифры, точка, тире и подчеркивание (до 64 знаков).", "danger")
+        return redirect(url_for("staff_view"))
+
     existing = StaffMember.query.filter_by(username=username).first()
     if existing:
         flash(f"Сотрудник с логином '{username}' уже существует.", "danger")
@@ -564,6 +607,9 @@ def edit_staff(staff_id):
         sudo_enabled = True
 
     if username and username != staff.username:
+        if not re.match(r"^[a-zA-Z0-9_.-]{1,64}$", username):
+            flash("Логин содержит недопустимые символы. Разрешены только латинские буквы, цифры, точка, тире и подчеркивание (до 64 знаков).", "danger")
+            return redirect(url_for("staff_view"))
         existing = StaffMember.query.filter_by(username=username).first()
         if existing:
             flash(f"Логин '{username}' уже занят другим сотрудником.", "danger")
@@ -686,6 +732,11 @@ def run_user_ops():
     if not target_users:
         flash("Список пользователей пуст.", "danger")
         return redirect(url_for("user_ops_view"))
+
+    for u in target_users:
+        if not re.match(r"^[a-zA-Z0-9_.-]{1,64}$", u["username"]):
+            flash(f"Некорректное имя пользователя '{u['username']}'. Разрешены только латинские буквы, цифры, '.', '_', '-' (до 64 знаков).", "danger")
+            return redirect(url_for("user_ops_view"))
 
     if operation == "delete":
         for u in target_users:
@@ -905,6 +956,7 @@ def playbooks_view():
 
 @app.route("/playbooks/new")
 @login_required
+@admin_required
 def playbook_new():
     sample_content = """---
 - name: Custom Automation Playbook
@@ -928,6 +980,7 @@ def playbook_new():
 
 @app.route("/playbooks/<path:filename>/edit")
 @login_required
+@admin_required
 def playbook_edit(filename):
     clean_filename = os.path.basename(filename)
     file_path = os.path.join(PLAYBOOKS_DIR, clean_filename)
@@ -948,6 +1001,7 @@ def playbook_edit(filename):
 
 @app.route("/playbooks/save", methods=["POST"])
 @login_required
+@admin_required
 def playbook_save():
     is_new = request.form.get("is_new") == "true"
     orig_filename = os.path.basename(request.form.get("original_filename", "").strip())
@@ -961,9 +1015,9 @@ def playbook_save():
         flash("Некорректное имя файла. Разрешены только латинские буквы, цифры, дефис, подчеркивание и расширение .yml", "danger")
         return redirect(request.referrer or url_for("playbooks_view"))
 
-    if not is_new and orig_filename in SYSTEM_PLAYBOOKS and filename != orig_filename:
-        flash("Имя системного плейбука не может быть изменено!", "danger")
-        return redirect(url_for("playbook_edit", filename=orig_filename))
+    if filename in SYSTEM_PLAYBOOKS or orig_filename in SYSTEM_PLAYBOOKS:
+        flash("Системные плейбуки защищены от редактирования через веб-интерфейс!", "danger")
+        return redirect(url_for("playbooks_view"))
 
     try:
         yaml.safe_load(content)
@@ -997,6 +1051,7 @@ def playbook_save():
 
 @app.route("/playbooks/<path:filename>/delete", methods=["POST"])
 @login_required
+@admin_required
 def playbook_delete(filename):
     clean_filename = os.path.basename(filename)
     if clean_filename in SYSTEM_PLAYBOOKS:
@@ -1032,6 +1087,7 @@ def playbook_download(filename):
 
 
 @app.route("/api/playbooks/validate", methods=["POST"])
+@csrf.exempt
 @login_required
 def api_playbook_validate():
     data = request.get_json(silent=True) or {}
@@ -1105,6 +1161,17 @@ def playbook_run_post(filename):
             except Exception as e:
                 flash(f"Ошибка в формате дополнительных переменных: {e}", "danger")
                 return redirect(url_for("playbook_run", filename=clean_filename))
+
+    if clean_filename == "service_restart.yml":
+        target_svc = str(extra_vars.get("target_service", "")).strip()
+        if target_svc and not re.match(r"^[a-zA-Z0-9_@.-]{1,64}$", target_svc):
+            flash("Недопустимое имя сервиса. Разрешены только латинские буквы, цифры, '.', '_', '-', '@' (до 64 знаков).", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        target_act = str(extra_vars.get("target_action", "restart")).strip().lower()
+        if target_act not in {"start", "stop", "restart", "reload", "status"}:
+            flash("Недопустимое действие для сервиса. Допустимы: start, stop, restart, reload, status.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        extra_vars["target_action"] = target_act
 
     cred_profile_id = request.form.get("credential_profile_id")
     if cred_profile_id and cred_profile_id.isdigit():

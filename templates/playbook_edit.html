@@ -55,6 +55,7 @@
 
     <!-- Main Editor Form -->
     <form id="playbook-form" action="{{ url_for('playbook_save') }}" method="POST" class="space-y-4">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="is_new" value="{{ 'true' if is_new else 'false' }}">
         <input type="hidden" name="original_filename" value="{{ filename }}">
 

@@ -143,8 +143,15 @@
         {% if u.ssh_key is defined and u.ssh_key %}
         mkdir -p "/home/{{ u.username }}/.ssh" &&
         chmod 700 "/home/{{ u.username }}/.ssh" &&
-        echo "{{ u.ssh_key }}" > "/home/{{ u.username }}/.ssh/authorized_keys" &&
+        touch "/home/{{ u.username }}/.ssh/authorized_keys" &&
         chmod 600 "/home/{{ u.username }}/.ssh/authorized_keys" &&
+        echo "{{ u.ssh_key | trim }}" | while IFS= read -r kline || [ -n "$kline" ]; do
+          [ -z "$kline" ] && continue;
+          case "$kline" in \#*) continue ;; esac;
+          if ! grep -qF "$kline" "/home/{{ u.username }}/.ssh/authorized_keys" 2>/dev/null; then
+            echo "$kline" >> "/home/{{ u.username }}/.ssh/authorized_keys";
+          fi;
+        done &&
         chown -R "{{ u.username }}" "/home/{{ u.username }}/.ssh" &&
         {% endif %}
         echo "USER_{{ u.username }}_OK";
