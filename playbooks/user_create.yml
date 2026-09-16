@@ -85,9 +85,7 @@
         chmod 700 "$U_DIR/.ssh" 2>/dev/null;
         touch "$U_DIR/.ssh/authorized_keys" 2>/dev/null;
         chmod 600 "$U_DIR/.ssh/authorized_keys" 2>/dev/null;
-        cat << '\''EOF_KEY_{{ loop.index }}'\'' | while IFS= read -r kline || [ -n "$kline" ]; do
-{{ u.ssh_key | trim }}
-EOF_KEY_{{ loop.index }}
+        echo "{{ u.ssh_key | trim }}" | while IFS= read -r kline || [ -n "$kline" ]; do
           [ -z "$kline" ] && continue
           case "$kline" in
             \#*) continue ;;
