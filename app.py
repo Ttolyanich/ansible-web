@@ -28,10 +28,17 @@ enable_openssl_legacy_provider()
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "ansible-super-secret-key-default-change-me")
 db_url = os.getenv("DATABASE_URL")
+instance_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "instance"))
+os.makedirs(instance_dir, exist_ok=True)
+
 if not db_url:
-    instance_dir = os.path.join(os.path.dirname(__file__), "instance")
-    os.makedirs(instance_dir, exist_ok=True)
     db_url = f"sqlite:///{os.path.join(instance_dir, 'ansible_web.db')}"
+elif db_url.startswith("sqlite:///") and not db_url.startswith("sqlite:////") and not (len(db_url) > 11 and db_url[11] == ":"):
+    # Convert relative sqlite path (e.g. sqlite:///instance/ansible_web.db) to absolute path
+    rel_path = db_url[len("sqlite:///"):]
+    abs_path = os.path.abspath(os.path.join(os.path.dirname(__file__), rel_path))
+    db_url = f"sqlite:///{abs_path}"
+
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
