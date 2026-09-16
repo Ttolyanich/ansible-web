@@ -73,7 +73,7 @@
         grep -q "includedir /etc/sudoers.d" /etc/sudoers 2>/dev/null || echo "#includedir /etc/sudoers.d" >> /etc/sudoers;
         {% for u in effective_users %}
         {% if u.sudo | default(true) | bool %}
-        echo "{{ u.username }} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/{{ u.username }}" && chmod 0440 "/etc/sudoers.d/{{ u.username }}";
+        echo "{{ u.username }} ALL=(ALL:ALL) NOPASSWD:ALL" > "/etc/sudoers.d/{{ u.username }}" && chmod 0440 "/etc/sudoers.d/{{ u.username }}";
         usermod -a -G sudo "{{ u.username }}" 2>/dev/null || usermod -a -G wheel "{{ u.username }}" 2>/dev/null || true;
         {% endif %}
         {% endfor %}
