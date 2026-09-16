@@ -39,49 +39,51 @@
 
         /* Sidebar transitions and collapsed states */
         #sidebar {
-            transition: width 0.25s ease-in-out;
+            transition: transform 0.25s ease-in-out, width 0.25s ease-in-out;
         }
-        #sidebar.sidebar-collapsed {
-            width: 4.5rem !important; /* 72px */
-        }
-        #sidebar.sidebar-collapsed .sidebar-text,
-        #sidebar.sidebar-collapsed .sidebar-user-details,
-        #sidebar.sidebar-collapsed .sidebar-badge {
-            display: none !important;
-        }
-        #sidebar.sidebar-collapsed .nav-item {
-            justify-content: center !important;
-            padding-left: 0 !important;
-            padding-right: 0 !important;
-        }
-        #sidebar.sidebar-collapsed .nav-item i {
-            margin-right: 0 !important;
-            font-size: 1.15rem;
-        }
-        #sidebar.sidebar-collapsed #sidebar-toggle i {
-            transform: rotate(180deg);
+        @media (min-width: 1024px) {
+            #sidebar.sidebar-collapsed {
+                width: 4.5rem !important; /* 72px */
+            }
+            #sidebar.sidebar-collapsed .sidebar-text,
+            #sidebar.sidebar-collapsed .sidebar-user-details,
+            #sidebar.sidebar-collapsed .sidebar-badge {
+                display: none !important;
+            }
+            #sidebar.sidebar-collapsed .nav-item {
+                justify-content: center !important;
+                padding-left: 0 !important;
+                padding-right: 0 !important;
+            }
+            #sidebar.sidebar-collapsed .nav-item i {
+                margin-right: 0 !important;
+                font-size: 1.15rem;
+            }
+            #sidebar.sidebar-collapsed #sidebar-toggle i {
+                transform: rotate(180deg);
+            }
         }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex font-sans antialiased">
-    <!-- Inline script to prevent sidebar flickering on load -->
+    <!-- Inline script to prevent sidebar flickering on load (desktop only) -->
     <script>
         (function() {
-            if (localStorage.getItem('sidebar_collapsed') === 'true') {
+            if (window.innerWidth >= 1024 && localStorage.getItem('sidebar_collapsed') === 'true') {
                 document.documentElement.classList.add('sidebar-is-collapsed');
             }
         })();
     </script>
 
     {% if current_user.is_authenticated %}
-    <!-- Mobile Sidebar Backdrop -->
-    <div id="mobile-backdrop" onclick="toggleMobileSidebar()" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-40 hidden lg:hidden"></div>
+    <!-- Mobile Sidebar Backdrop (Off-canvas) -->
+    <div id="mobile-backdrop" onclick="closeMobileSidebar()" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-40 hidden opacity-0 transition-opacity duration-300 lg:hidden"></div>
 
     <!-- Left Sidebar Navigation -->
-    <aside id="sidebar" class="bg-slate-900 border-r border-slate-800 flex flex-col justify-between fixed lg:sticky top-0 h-screen z-50 w-64 shrink-0 transition-all duration-300">
+    <aside id="sidebar" class="bg-slate-900 border-r border-slate-800 flex flex-col justify-between fixed inset-y-0 left-0 h-full max-h-screen z-50 w-72 max-w-[85vw] shrink-0 transition-transform duration-300 ease-in-out -translate-x-full lg:translate-x-0 lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:max-h-screen lg:inset-auto overflow-y-auto">
         <script>
-            if (localStorage.getItem('sidebar_collapsed') === 'true') {
+            if (window.innerWidth >= 1024 && localStorage.getItem('sidebar_collapsed') === 'true') {
                 document.getElementById('sidebar').classList.add('sidebar-collapsed');
             }
         </script>
@@ -94,7 +96,12 @@
                     <i class="fa-solid fa-terminal text-2xl shrink-0"></i>
                     <span class="sidebar-text font-bold text-lg tracking-tight text-white whitespace-nowrap">Ansible<span class="text-red-500">Web</span></span>
                 </a>
-                <button type="button" id="sidebar-toggle" onclick="toggleSidebar()" title="Свернуть / Развернуть панель" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition">
+                <!-- Mobile Close Button -->
+                <button type="button" onclick="closeMobileSidebar()" class="lg:hidden text-slate-400 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition" title="Закрыть меню">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+                <!-- Desktop Collapse Button -->
+                <button type="button" id="sidebar-toggle" onclick="toggleSidebar()" title="Свернуть / Развернуть панель" class="hidden lg:block text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition">
                     <i class="fa-solid fa-angles-left text-sm transition-transform duration-300"></i>
                 </button>
             </div>
@@ -184,20 +191,23 @@
     <div class="flex-1 flex flex-col min-w-0 min-h-screen">
         {% if current_user.is_authenticated %}
         <!-- Mobile Top Navbar (Visible on mobile only) -->
-        <header class="lg:hidden bg-slate-900 border-b border-slate-800 h-14 px-4 flex items-center justify-between sticky top-0 z-30">
-            <button type="button" onclick="toggleMobileSidebar()" class="text-slate-400 hover:text-white p-2">
+        <header class="lg:hidden bg-slate-900 border-b border-slate-800 h-14 px-3 sm:px-4 flex items-center justify-between sticky top-0 z-30 shrink-0">
+            <button type="button" onclick="openMobileSidebar()" class="text-slate-300 hover:text-white p-2 rounded-lg hover:bg-slate-800 transition flex items-center justify-center -ml-1" aria-label="Открыть меню навигации">
                 <i class="fa-solid fa-bars text-lg"></i>
             </button>
             <a href="{{ url_for('dashboard') }}" class="flex items-center space-x-2 text-red-500 font-bold text-base">
                 <i class="fa-solid fa-terminal"></i>
                 <span class="text-white">Ansible<span class="text-red-500">Web</span></span>
             </a>
-            <div class="w-8"></div>
+            <div class="flex items-center space-x-2">
+                <span class="w-2 h-2 rounded-full {% if current_user.is_admin %}bg-purple-400{% else %}bg-blue-400{% endif %}"></span>
+                <span class="text-xs font-semibold text-slate-300 font-mono">{{ current_user.username }}</span>
+            </div>
         </header>
         {% endif %}
 
         <!-- Floating Toast Notifications (Top-Right) -->
-        <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none px-4 sm:px-0">
+        <div id="toast-container" class="fixed top-16 sm:top-5 right-0 sm:right-5 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none px-3 sm:px-0">
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}
@@ -218,7 +228,7 @@
         </div>
 
         <!-- Dynamic Content -->
-        <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full">
+        <main class="flex-grow max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 w-full">
             {% block content %}{% endblock %}
         </main>
 
@@ -240,12 +250,65 @@
             localStorage.setItem('sidebar_collapsed', isCollapsed ? 'true' : 'false');
         }
 
-        function toggleMobileSidebar() {
+        function openMobileSidebar() {
             const sidebar = document.getElementById('sidebar');
             const backdrop = document.getElementById('mobile-backdrop');
-            sidebar.classList.toggle('hidden');
-            backdrop.classList.toggle('hidden');
+            if (!sidebar || !backdrop) return;
+            sidebar.classList.remove('-translate-x-full');
+            backdrop.classList.remove('hidden');
+            requestAnimationFrame(() => {
+                backdrop.classList.remove('opacity-0');
+                backdrop.classList.add('opacity-100');
+            });
+            document.body.classList.add('overflow-hidden');
         }
+
+        function closeMobileSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const backdrop = document.getElementById('mobile-backdrop');
+            if (!sidebar || !backdrop) return;
+            sidebar.classList.add('-translate-x-full');
+            backdrop.classList.remove('opacity-100');
+            backdrop.classList.add('opacity-0');
+            setTimeout(() => {
+                backdrop.classList.add('hidden');
+            }, 300);
+            document.body.classList.remove('overflow-hidden');
+        }
+
+        function toggleMobileSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            if (sidebar && sidebar.classList.contains('-translate-x-full')) {
+                openMobileSidebar();
+            } else {
+                closeMobileSidebar();
+            }
+        }
+
+        // Close mobile drawer on navigation link click
+        document.querySelectorAll('#sidebar nav a, #sidebar .p-3 a').forEach(link => {
+            link.addEventListener('click', () => {
+                if (window.innerWidth < 1024) {
+                    closeMobileSidebar();
+                }
+            });
+        });
+
+        // Close on ESC
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && window.innerWidth < 1024) {
+                closeMobileSidebar();
+            }
+        });
+
+        // Handle window resize from mobile to desktop
+        window.addEventListener('resize', () => {
+            if (window.innerWidth >= 1024) {
+                const backdrop = document.getElementById('mobile-backdrop');
+                if (backdrop) backdrop.classList.add('hidden');
+                document.body.classList.remove('overflow-hidden');
+            }
+        });
 
         function dismissToast(el) {
             if (!el) return;

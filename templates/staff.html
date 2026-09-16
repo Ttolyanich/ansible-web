@@ -130,8 +130,8 @@
 </div>
 
 <!-- Modal: Create Staff Member -->
-<div id="create-staff-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-xl w-full p-6 shadow-2xl space-y-4">
+<div id="create-staff-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-3 sm:p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-xl w-full p-4 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
         <div class="flex justify-between items-center pb-3 border-b border-slate-800">
             <h3 class="text-base font-bold text-white flex items-center gap-2">
                 <i class="fa-solid fa-user-plus text-purple-400"></i> Новый профиль сотрудника
@@ -140,7 +140,7 @@
         </div>
 
         <form method="POST" action="{{ url_for('create_staff') }}" class="space-y-4 text-xs">
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                     <label class="block text-slate-300 font-semibold mb-1">ФИО сотрудника <span class="text-red-500">*</span></label>
                     <input type="text" name="name" required placeholder="например: Иван Иванов"
@@ -153,7 +153,7 @@
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                     <label class="block text-slate-300 font-semibold mb-1">Отдел / Должность</label>
                     <input type="text" name="department" placeholder="например: DevOps / Системный админ"
@@ -193,8 +193,8 @@
 </div>
 
 <!-- Modal: Edit Staff Member -->
-<div id="edit-staff-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-4">
-    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-xl w-full p-6 shadow-2xl space-y-4">
+<div id="edit-staff-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-3 sm:p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-xl w-full p-4 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
         <div class="flex justify-between items-center pb-3 border-b border-slate-800">
             <h3 class="text-base font-bold text-white flex items-center gap-2">
                 <i class="fa-solid fa-user-pen text-purple-400"></i> Редактирование сотрудника
@@ -203,7 +203,7 @@
         </div>
 
         <form id="edit-staff-form" method="POST" action="" class="space-y-4 text-xs">
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                     <label class="block text-slate-300 font-semibold mb-1">ФИО сотрудника <span class="text-red-500">*</span></label>
                     <input type="text" id="edit-staff-name" name="name" required
@@ -216,7 +216,7 @@
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                     <label class="block text-slate-300 font-semibold mb-1">Отдел / Должность</label>
                     <input type="text" id="edit-staff-department" name="department"

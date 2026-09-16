@@ -5,26 +5,26 @@
 {% block content %}
 <div class="space-y-6 max-w-5xl mx-auto">
     <!-- Breadcrumbs & Header -->
-    <div class="flex items-center justify-between bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-sm">
-        <div class="flex items-center space-x-3.5">
-            <a href="{{ url_for('playbooks_view') }}" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition border border-slate-700 text-xs">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-900 border border-slate-800 p-4 sm:p-5 rounded-xl shadow-sm">
+        <div class="flex items-center space-x-3.5 min-w-0 flex-1">
+            <a href="{{ url_for('playbooks_view') }}" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition border border-slate-700 text-xs shrink-0">
                 <i class="fa-solid fa-arrow-left"></i>
             </a>
-            <div>
-                <div class="flex items-center gap-2">
-                    <h1 class="text-xl font-bold text-white tracking-tight">Запуск плейбука: <span class="text-red-400 font-mono">{{ filename }}</span></h1>
+            <div class="min-w-0">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <h1 class="text-lg sm:text-xl font-bold text-white tracking-tight break-words leading-snug">Запуск плейбука: <span class="text-red-400 font-mono">{{ filename }}</span></h1>
                     {% if is_system %}
-                    <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-blue-950/80 text-blue-300 border border-blue-800/60">
+                    <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-blue-950/80 text-blue-300 border border-blue-800/60 shrink-0">
                         Системный
                     </span>
                     {% endif %}
                 </div>
-                <p class="text-xs text-slate-400 mt-0.5">{{ playbook_title }}</p>
+                <p class="text-xs text-slate-400 mt-0.5 truncate">{{ playbook_title }}</p>
             </div>
         </div>
 
-        <div class="flex items-center gap-2">
-            <a href="{{ url_for('playbook_edit', filename=filename) }}" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+        <div class="w-full sm:w-auto flex items-center justify-end gap-2">
+            <a href="{{ url_for('playbook_edit', filename=filename) }}" class="w-full sm:w-auto justify-center px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
                 <i class="fa-solid fa-code text-indigo-400"></i>
                 <span>Код сценария</span>
             </a>

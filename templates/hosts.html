@@ -5,30 +5,30 @@
 {% block content %}
 <div class="space-y-6">
     <!-- Top Action & Search Bar -->
-    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900 border border-slate-800 p-5 rounded-xl">
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900 border border-slate-800 p-4 sm:p-5 rounded-xl">
         <div>
             <h1 class="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-                <i class="fa-solid fa-server text-red-500"></i> Инвентарь серверов
+                <i class="fa-solid fa-server text-red-500"></i> <span>Инвентарь серверов</span>
             </h1>
             <p class="text-xs text-slate-400 mt-0.5">Отображено: {{ hosts|length }} хостов</p>
         </div>
 
-        <div class="flex flex-wrap items-center gap-3 w-full md:w-auto">
-            <form action="{{ url_for('sync_zabbix_now') }}" method="POST">
-                <button type="submit" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+        <div class="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2.5 w-full md:w-auto">
+            <form action="{{ url_for('sync_zabbix_now') }}" method="POST" class="col-span-2 sm:col-span-1">
+                <button type="submit" class="w-full justify-center px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5 cursor-pointer">
                     <i class="fa-solid fa-arrows-rotate text-blue-400"></i>
                     <span>Обновить из Zabbix</span>
                 </button>
             </form>
-            <button type="button" onclick="submitBatchAction('ping')" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5">
+            <button type="button" onclick="submitBatchAction('ping')" class="justify-center px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5 cursor-pointer">
                 <i class="fa-solid fa-bolt"></i>
                 <span>Ping (<span id="selected-count-ping">0</span>)</span>
             </button>
-            <button type="button" onclick="submitBatchAction('ansible_init')" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5" title="Развернуть системного пользователя ansible на выбранных серверах">
+            <button type="button" onclick="submitBatchAction('ansible_init')" class="justify-center px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5 cursor-pointer" title="Развернуть системного пользователя ansible на выбранных серверах">
                 <i class="fa-solid fa-robot text-amber-300"></i>
                 <span>Ansible (<span id="selected-count-ansible">0</span>)</span>
             </button>
-            <button type="button" onclick="submitBatchAction('user_ops')" class="px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5">
+            <button type="button" onclick="submitBatchAction('user_ops')" class="col-span-2 sm:col-span-1 justify-center px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5 cursor-pointer">
                 <i class="fa-solid fa-user-gear"></i>
                 <span>Учетки (<span id="selected-count-user">0</span>)</span>
             </button>
