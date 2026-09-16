@@ -33,7 +33,7 @@
       when: os_type | default('linux') == 'linux'
       ansible.builtin.raw: >
         sh -c '
-        rm -f "/etc/sudoers.d/{{ item.username }}" 2>/dev/null || true;
+        rm -f "/etc/sudoers.d/{{ item.username }}" "/etc/sudoers.d/{{ item.username | replace('.', '_') }}" 2>/dev/null || true;
         userdel -r "{{ item.username }}" 2>/dev/null || deluser --remove-home "{{ item.username }}" 2>/dev/null || userdel "{{ item.username }}" 2>/dev/null || true;
         '
       loop: "{{ effective_users }}"
