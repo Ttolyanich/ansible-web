@@ -64,6 +64,76 @@
       changed_when: false
       failed_when: false
 
+    - name: "[Linux] Setup user shell, bashrc, and color prompt"
+      when: os_type | default('linux') == 'linux'
+      ansible.builtin.raw: >
+        sh -c '
+        USER_DIR=$(getent passwd "{{ item.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ item.username }}");
+        [ -z "$USER_DIR" ] && USER_DIR="/home/{{ item.username }}";
+        mkdir -p "$USER_DIR" 2>/dev/null;
+
+        # Ensure shell is bash if available
+        if command -v bash >/dev/null 2>&1; then
+          BASH_PATH="$(command -v bash)";
+          usermod -s "$BASH_PATH" "{{ item.username }}" 2>/dev/null || chsh -s "$BASH_PATH" "{{ item.username }}" 2>/dev/null || true;
+        fi;
+
+        # Copy skeleton files if missing
+        if [ ! -f "$USER_DIR/.bashrc" ] && [ -f /etc/skel/.bashrc ]; then
+          cp -a /etc/skel/.bashrc "$USER_DIR/.bashrc" 2>/dev/null || true;
+        fi;
+        if [ ! -f "$USER_DIR/.profile" ] && [ -f /etc/skel/.profile ]; then
+          cp -a /etc/skel/.profile "$USER_DIR/.profile" 2>/dev/null || true;
+        fi;
+        if [ ! -f "$USER_DIR/.bash_logout" ] && [ -f /etc/skel/.bash_logout ]; then
+          cp -a /etc/skel/.bash_logout "$USER_DIR/.bash_logout" 2>/dev/null || true;
+        fi;
+
+        # If .bashrc is still missing (distro without skel / Alpine / bare container), create a clean one
+        if [ ! -s "$USER_DIR/.bashrc" ]; then
+          echo "[ -z \"\$PS1\" ] && return" > "$USER_DIR/.bashrc";
+          echo "shopt -s checkwinsize 2>/dev/null" >> "$USER_DIR/.bashrc";
+          echo "shopt -s histappend 2>/dev/null" >> "$USER_DIR/.bashrc";
+          echo "HISTCONTROL=ignoreboth" >> "$USER_DIR/.bashrc";
+          echo "HISTSIZE=10000" >> "$USER_DIR/.bashrc";
+          echo "HISTFILESIZE=20000" >> "$USER_DIR/.bashrc";
+        fi;
+
+        # Enable force_color_prompt and common aliases in bashrc
+        sed -i "s/^#force_color_prompt=yes/force_color_prompt=yes/" "$USER_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias ll=/alias ll=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias la=/alias la=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias l=/alias l=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias grep=/alias grep=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias fgrep=/alias fgrep=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias egrep=/alias egrep=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
+
+        # Ensure color PS1 exists if not already present (for CentOS/RHEL/minimal distros)
+        if ! grep -q "033\[01;" "$USER_DIR/.bashrc" 2>/dev/null && ! grep -q "force_color_prompt" "$USER_DIR/.bashrc" 2>/dev/null; then
+          echo "alias ls=\"ls --color=auto\"" >> "$USER_DIR/.bashrc";
+          echo "alias ll=\"ls -laF --color=auto\"" >> "$USER_DIR/.bashrc";
+          echo "alias grep=\"grep --color=auto\"" >> "$USER_DIR/.bashrc";
+          echo "if [ \"\$(id -u)\" -eq 0 ]; then" >> "$USER_DIR/.bashrc";
+          echo "  PS1=\"\\[\\033[01;31m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]# \"" >> "$USER_DIR/.bashrc";
+          echo "else" >> "$USER_DIR/.bashrc";
+          echo "  PS1=\"\\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ \"" >> "$USER_DIR/.bashrc";
+          echo "fi" >> "$USER_DIR/.bashrc";
+        fi;
+
+        # Ensure ~/.profile sources ~/.bashrc
+        if [ ! -f "$USER_DIR/.profile" ]; then
+          echo "if [ -n \"\$BASH_VERSION\" ] && [ -f \"\$HOME/.bashrc\" ]; then . \"\$HOME/.bashrc\"; fi" > "$USER_DIR/.profile";
+        fi;
+
+        UG="\$(id -gn \"{{ item.username }}\" 2>/dev/null || echo \"{{ item.username }}\")";
+        chown \"{{ item.username }}:\$UG\" "$USER_DIR/.bashrc" "$USER_DIR/.profile" "$USER_DIR/.bash_logout" 2>/dev/null || chown \"{{ item.username }}\" "$USER_DIR/.bashrc" "$USER_DIR/.profile" "$USER_DIR/.bash_logout" 2>/dev/null || true;
+        chmod 644 "$USER_DIR/.bashrc" "$USER_DIR/.profile" "$USER_DIR/.bash_logout" 2>/dev/null || true;
+        '
+      loop: "{{ effective_users }}"
+      register: linux_bashrc_res
+      changed_when: false
+      failed_when: false
+
     - name: "[Linux] Configure sudoers and administrator privileges"
       when: 
         - os_type | default('linux') == 'linux'
