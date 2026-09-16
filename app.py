@@ -122,16 +122,22 @@ def logout():
 @app.route("/")
 @login_required
 def dashboard():
-    total_hosts = Host.query.filter_by(is_enabled=True).count()
-    online_hosts = Host.query.filter_by(is_enabled=True, last_status="online").count()
-    offline_hosts = Host.query.filter_by(is_enabled=True, last_status="offline").count()
-    unknown_hosts = Host.query.filter_by(is_enabled=True, last_status="unknown").count()
-    linux_hosts = Host.query.filter_by(is_enabled=True, os_type="linux").count()
-    windows_hosts = Host.query.filter_by(is_enabled=True, os_type="windows").count()
-    network_hosts = Host.query.filter_by(is_enabled=True, os_type="network").count()
+    base_hosts = Host.query.filter_by(is_enabled=True)
+    total_hosts = base_hosts.count()
+    server_hosts = base_hosts.filter_by(is_ignored=False)
+    total_servers = server_hosts.count()
+    equipment_count = base_hosts.filter_by(is_ignored=True).count()
+    online_hosts = server_hosts.filter_by(last_status="online").count()
+    offline_hosts = server_hosts.filter_by(last_status="offline").count()
+    unknown_hosts = server_hosts.filter_by(last_status="unknown").count()
+    linux_hosts = server_hosts.filter_by(os_type="linux").count()
+    windows_hosts = server_hosts.filter_by(os_type="windows").count()
+    network_hosts = base_hosts.filter_by(os_type="network").count()
 
     stats = {
         "total": total_hosts,
+        "servers": total_servers,
+        "equipment": equipment_count,
         "online": online_hosts,
         "offline": offline_hosts,
         "unknown": unknown_hosts,
@@ -159,7 +165,18 @@ def dashboard():
 @app.route("/hosts")
 @login_required
 def hosts_view():
-    query = Host.query.filter_by(is_enabled=True)
+    tab = request.args.get("tab", "servers").strip() # 'servers', 'equipment', 'all'
+    base_query = Host.query.filter_by(is_enabled=True)
+
+    count_servers = base_query.filter_by(is_ignored=False).count()
+    count_equipment = base_query.filter_by(is_ignored=True).count()
+    count_total = base_query.count()
+
+    query = base_query
+    if tab == "servers":
+        query = query.filter_by(is_ignored=False)
+    elif tab == "equipment":
+        query = query.filter_by(is_ignored=True)
 
     filter_q = request.args.get("q", "").strip()
     filter_group_id = request.args.get("group_id", "").strip()
@@ -179,16 +196,112 @@ def hosts_view():
 
     hosts = query.order_by(Host.name).all()
     groups = HostGroup.query.order_by(HostGroup.name).all()
+    credential_profiles = CredentialProfile.query.order_by(CredentialProfile.name).all()
 
     return render_template(
         "hosts.html",
         hosts=hosts,
         groups=groups,
+        credential_profiles=credential_profiles,
+        tab=tab,
+        count_servers=count_servers,
+        count_equipment=count_equipment,
+        count_total=count_total,
         filter_q=filter_q,
         filter_group_id=filter_group_id,
         filter_os=filter_os,
         filter_status=filter_status
     )
+
+@app.route("/hosts/create", methods=["POST"])
+@login_required
+def create_host_manual():
+    import time
+    name = request.form.get("name", "").strip()
+    ip_address = request.form.get("ip_address", "").strip()
+    raw_port = request.form.get("ssh_port", "").strip()
+    os_type = request.form.get("os_type", "linux").strip()
+    group_id = request.form.get("group_id")
+    credential_id = request.form.get("credential_id")
+    description = request.form.get("description", "").strip()
+    register_in_zabbix = request.form.get("register_in_zabbix") == "1"
+
+    if not name or not ip_address:
+        flash("Имя хоста и IP-адрес обязательны для заполнения.", "error")
+        return redirect(url_for("hosts_view"))
+
+    existing = Host.query.filter((Host.name == name) | (Host.ip_address == ip_address)).first()
+    if existing:
+        flash(f"Хост с таким именем или IP уже существует: {existing.name} ({existing.ip_address})", "warning")
+        return redirect(url_for("host_detail", host_id=existing.id))
+
+    ssh_port = int(raw_port) if raw_port and raw_port.isdigit() else 22
+    manual_hid = f"manual_{int(time.time())}_{name[:8]}"
+
+    host = Host(
+        zabbix_hostid=manual_hid,
+        name=name,
+        ip_address=ip_address,
+        ssh_port=ssh_port,
+        is_ip_manually_set=True,
+        is_os_manually_set=True,
+        is_ignored_manually_set=True,
+        ip_source="manual",
+        zabbix_agent_ip=ip_address,
+        zabbix_description=description,
+        os_type=os_type,
+        group_id=int(group_id) if group_id else None,
+        credential_id=int(credential_id) if credential_id else None,
+        is_enabled=True,
+        is_ignored=False,
+        device_type="server",
+        last_status="unknown"
+    )
+    db.session.add(host)
+    db.session.commit()
+
+    if register_in_zabbix:
+        z_setting = ZabbixSetting.query.first()
+        if z_setting and z_setting.url and z_setting.token:
+            try:
+                from zabbix_client import ZabbixClient
+                client = ZabbixClient(z_setting.url, z_setting.token, verify_ssl=z_setting.verify_ssl)
+                zg_id = host.group.zabbix_groupid if host.group and host.group.zabbix_groupid else "2"
+                tmpl = "Linux by Zabbix agent" if os_type == "linux" else "Windows by Zabbix agent"
+                z_res = client.create_host(host.name, host.ip_address, zg_id, template_name=tmpl)
+                if z_res and "hostids" in z_res and z_res["hostids"]:
+                    host.zabbix_hostid = str(z_res["hostids"][0])
+                    db.session.commit()
+                    flash(f"Хост {name} добавлен и зарегистрирован в Zabbix (ID: {host.zabbix_hostid}).", "success")
+            except Exception as ze:
+                flash(f"Хост {name} добавлен, но регистрация в Zabbix вернула ошибку: {ze}", "warning")
+        else:
+            flash(f"Хост {name} успешно добавлен в систему.", "success")
+    else:
+        flash(f"Хост {name} успешно добавлен в систему.", "success")
+
+    return redirect(url_for("host_detail", host_id=host.id))
+
+@app.route("/hosts/toggle-ignore", methods=["POST"])
+@login_required
+def toggle_ignore_hosts():
+    host_ids = request.form.getlist("host_ids")
+    action = request.form.get("ignore_action", "ignore")
+    new_val = (action == "ignore")
+
+    if not host_ids:
+        flash("Не выбрано ни одного хоста.", "warning")
+        return redirect(url_for("hosts_view"))
+
+    hosts = Host.query.filter(Host.id.in_(host_ids)).all()
+    for h in hosts:
+        h.is_ignored = new_val
+        h.is_ignored_manually_set = True
+
+    db.session.commit()
+    act_text = "помечены как игнорируемое оборудование" if new_val else "возвращены в активные серверы"
+    flash(f"Обновлено {len(hosts)} хостов: {act_text}.", "success")
+    return redirect(url_for("hosts_view"))
 
 @app.route("/hosts/<int:host_id>", methods=["GET", "POST"])
 @login_required
@@ -200,7 +313,6 @@ def host_detail(host_id):
         action = request.form.get("action", "save")
         
         if action == "reset_ip":
-            # Revert to automatic IP & Port (VPN from comment if present, else original Zabbix agent IP)
             host.is_ip_manually_set = False
             from zabbix_client import extract_vpn_ip_from_comment, extract_port_from_comment
             vpn_ip = extract_vpn_ip_from_comment(host.zabbix_description)
@@ -226,6 +338,18 @@ def host_detail(host_id):
             flash(f"Тип ОС хоста {host.name} сброшен на автоопределение ({host.os_type}).", "info")
             return redirect(url_for("host_detail", host_id=host.id))
 
+        if action == "reset_ignored":
+            host.is_ignored_manually_set = False
+            from zabbix_client import detect_equipment_type
+            templates = [t.strip() for t in (host.zabbix_templates or "").split(",") if t.strip()]
+            is_eq, eq_type = detect_equipment_type(templates, host.name, host.zabbix_description)
+            host.is_ignored = is_eq
+            host.device_type = eq_type
+            db.session.commit()
+            status_text = "игнорируемое оборудование" if is_eq else "обычный сервер"
+            flash(f"Статус оборудования хоста {host.name} сброшен на автоопределение ({status_text}).", "info")
+            return redirect(url_for("host_detail", host_id=host.id))
+
         new_ip = request.form.get("ip_address", host.ip_address).strip()
         if new_ip and new_ip != host.ip_address:
             host.ip_address = new_ip
@@ -249,6 +373,17 @@ def host_detail(host_id):
             host.os_type = new_os
             host.is_os_manually_set = True
 
+        # Equipment / Ignore status
+        is_ignored_val = request.form.get("is_ignored") == "1"
+        if host.is_ignored != is_ignored_val:
+            host.is_ignored = is_ignored_val
+            host.is_ignored_manually_set = True
+
+        dev_type = request.form.get("device_type")
+        if dev_type and dev_type != host.device_type:
+            host.device_type = dev_type
+            host.is_ignored_manually_set = True
+
         cred_id = request.form.get("credential_id")
         host.credential_id = int(cred_id) if cred_id else None
         
@@ -262,6 +397,58 @@ def host_detail(host_id):
         credential_profiles=credential_profiles
     )
 
+@app.route("/hosts/<int:host_id>/bootstrap", methods=["POST"])
+@login_required
+def bootstrap_host_view(host_id):
+    host = db.get_or_404(Host, host_id)
+    timezone = request.form.get("timezone", "Asia/Almaty").strip()
+    install_zabbix = request.form.get("install_zabbix_agent") == "1"
+    cred_profile_id = request.form.get("credential_profile_id")
+    register_in_zabbix = request.form.get("register_in_zabbix") == "1"
+
+    z_setting = ZabbixSetting.query.first()
+    zabbix_ip = "185.102.74.23"
+    if z_setting and z_setting.url:
+        m = re.search(r'https?://([^/:]+)', z_setting.url)
+        if m:
+            zabbix_ip = m.group(1)
+
+    extra_vars = {
+        "timezone": timezone,
+        "zabbix_server_ip": zabbix_ip,
+        "install_zabbix_agent": install_zabbix
+    }
+    if cred_profile_id and cred_profile_id.isdigit():
+        extra_vars["_credential_profile_id"] = int(cred_profile_id)
+
+    task_id = dispatch_task(
+        app=app,
+        task_type="playbook_run",
+        playbook_name="host_bootstrap.yml",
+        host_ids=[host.id],
+        extra_vars=extra_vars,
+        user_id=current_user.id,
+        summary=f"Первоначальная настройка и установка Zabbix Agent на {host.name}",
+        filter_info=f"Хост: {host.name} ({host.ip_address})"
+    )
+
+    if register_in_zabbix and str(host.zabbix_hostid).startswith("manual_"):
+        if z_setting and z_setting.url and z_setting.token:
+            try:
+                from zabbix_client import ZabbixClient
+                client = ZabbixClient(z_setting.url, z_setting.token, verify_ssl=z_setting.verify_ssl)
+                zg_id = host.group.zabbix_groupid if host.group and host.group.zabbix_groupid else "2"
+                tmpl = "Linux by Zabbix agent" if host.os_type == "linux" else "Windows by Zabbix agent"
+                z_res = client.create_host(host.name, host.ip_address, zg_id, template_name=tmpl)
+                if z_res and "hostids" in z_res and z_res["hostids"]:
+                    host.zabbix_hostid = str(z_res["hostids"][0])
+                    db.session.commit()
+            except Exception as e:
+                app.logger.warning(f"Failed to auto-register in Zabbix: {e}")
+
+    flash(f"Запущена задача первоначальной раскатки хоста {host.name}.", "info")
+    return redirect(url_for("task_detail", task_id=task_id))
+
 
 # -------------------------------------------------------------
 # Ping / Availability Check
@@ -269,9 +456,9 @@ def host_detail(host_id):
 @app.route("/ping/all", methods=["POST"])
 @login_required
 def run_ping_all():
-    hosts = Host.query.filter_by(is_enabled=True).all()
+    hosts = Host.query.filter_by(is_enabled=True, is_ignored=False).all()
     if not hosts:
-        flash("Нет активных хостов для проверки.", "warning")
+        flash("Нет активных серверов для проверки.", "warning")
         return redirect(url_for("dashboard"))
 
     host_ids = [h.id for h in hosts]
@@ -282,10 +469,10 @@ def run_ping_all():
         host_ids=host_ids,
         extra_vars={},
         user_id=current_user.id,
-        summary=f"Быстрая SSH проверка доступности ({len(host_ids)} хостов)",
-        filter_info="Все хосты"
+        summary=f"Быстрая SSH проверка доступности ({len(host_ids)} серверов)",
+        filter_info="Все активные серверы"
     )
-    flash(f"Запущена проверка доступности для {len(host_ids)} хостов.", "info")
+    flash(f"Запущена проверка доступности для {len(host_ids)} серверов (спецоборудование исключено).", "info")
     return redirect(url_for("task_detail", task_id=task_id))
 
 @app.route("/ping/batch", methods=["POST"])
@@ -1549,6 +1736,12 @@ def bootstrap_database():
                         conn.execute(db.text("ALTER TABLE hosts ADD COLUMN ssh_port INTEGER DEFAULT NULL"))
                     if "is_os_manually_set" not in existing_cols:
                         conn.execute(db.text("ALTER TABLE hosts ADD COLUMN is_os_manually_set BOOLEAN DEFAULT 0"))
+                    if "is_ignored" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN is_ignored BOOLEAN DEFAULT 0"))
+                    if "is_ignored_manually_set" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN is_ignored_manually_set BOOLEAN DEFAULT 0"))
+                    if "device_type" not in existing_cols:
+                        conn.execute(db.text("ALTER TABLE hosts ADD COLUMN device_type VARCHAR(50) DEFAULT 'server'"))
                     conn.commit()
 
             if "staff_members" in inspector.get_table_names():

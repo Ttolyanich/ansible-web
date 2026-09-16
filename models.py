@@ -215,6 +215,9 @@ class Host(db.Model):
     last_checked_at = db.Column(db.DateTime, nullable=True)
     last_error = db.Column(db.Text, nullable=True)
     is_enabled = db.Column(db.Boolean, default=True)
+    is_ignored = db.Column(db.Boolean, default=False) # True for iDRAC, IPMI, NAS, Network, UPS, etc.
+    is_ignored_manually_set = db.Column(db.Boolean, default=False)
+    device_type = db.Column(db.String(50), default="server") # 'server', 'idrac_ipmi', 'nas', 'network', 'ups', 'other'
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

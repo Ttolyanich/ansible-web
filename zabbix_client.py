@@ -153,6 +153,43 @@ class ZabbixClient:
 
         return groups_raw or [], hosts_raw or []
 
+    def create_host(self, host_name: str, ip_address: str, group_id: str, port: int = 10050, proxy_hostid: Optional[str] = None, template_name: str = "Linux by Zabbix agent") -> dict:
+        """Creates a new host in Zabbix via host.create API."""
+        templates_payload = []
+        try:
+            tmpl_res = self._call("template.get", {
+                "output": ["templateid", "name"],
+                "filter": {"name": [template_name, "Linux by Zabbix agent", "Windows by Zabbix agent"]}
+            })
+            if tmpl_res:
+                templates_payload.append({"templateid": tmpl_res[0]["templateid"]})
+        except Exception as e:
+            logger.warning(f"Failed to fetch template {template_name}: {e}")
+
+        interface_data = {
+            "type": 1,
+            "main": 1,
+            "useip": 1,
+            "ip": ip_address,
+            "dns": "",
+            "port": str(port)
+        }
+
+        params = {
+            "host": host_name,
+            "name": host_name,
+            "interfaces": [interface_data],
+            "groups": [{"groupid": str(group_id)}],
+            "status": 0
+        }
+        if templates_payload:
+            params["templates"] = templates_payload
+        if proxy_hostid and str(proxy_hostid) not in ("0", ""):
+            params["proxy_hostid"] = str(proxy_hostid)
+
+        return self._call("host.create", params)
+
+
 
 NETWORK_KEYWORDS = [
     "tp-link", "tplink", "cisco", "mikrotik", "routeros", "keenetic",
@@ -197,6 +234,51 @@ def detect_os_type(template_names: list, host_name: str = "") -> str:
         return "linux"
 
     return "unknown"
+
+
+def detect_equipment_type(template_names: list, host_name: str = "", description: str = "") -> Tuple[bool, str]:
+    """
+    Detects if a host is non-standard equipment (iDRAC, IPMI, iLO, Synology NAS, Network switch, UPS, Printer)
+    that should not be probed via SSH / Ansible tasks.
+    Returns: (is_ignored: bool, device_type: str)
+      device_type can be: 'server', 'idrac_ipmi', 'nas', 'network', 'ups', 'printer', 'other'
+    """
+    t_lower = " ".join([t.lower() for t in template_names])
+    h_lower = host_name.lower()
+    d_lower = (description or "").lower()
+    combined = f"{t_lower} {h_lower} {d_lower}"
+
+    # 1. iDRAC, IPMI, iLO, IMM, BMC
+    if any(k in t_lower or k in h_lower for k in ["idrac", "ipmi", "ilo", "bmc", "imm"]):
+        return True, "idrac_ipmi"
+
+    # 2. NAS / Storage (Synology, QNAP, TrueNAS, etc.)
+    if any(k in combined for k in ["synology", "diskstation", "qnap", "truenas", "freenas", "asustor", "netapp"]):
+        return True, "nas"
+    if re.search(r'(?:^|[_\-.])nas(?:[_\-.\d]|$)', h_lower) or "_nas" in h_lower or "-nas" in h_lower:
+        return True, "nas"
+
+    # 3. UPS / PDU
+    if any(k in combined for k in ["smart-ups", "eaton", "cyberpower", "powercom", "liebert"]) or (
+        ("apc" in h_lower or "ups" in h_lower) and not ("linux" in t_lower or "windows" in t_lower)
+    ):
+        return True, "ups"
+
+    # 4. Printers / MFPs
+    if any(k in combined for k in ["kyocera", "xerox", "ricoh", "konica"]) or (
+        "printer" in combined and not ("linux" in t_lower or "windows" in t_lower)
+    ):
+        return True, "printer"
+
+    # 5. Network equipment (Switches, Routers, Firewalls)
+    if any(k in t_lower for k in NETWORK_KEYWORDS) or (
+        any(k in h_lower for k in NETWORK_KEYWORDS) and not ("linux" in t_lower or "windows" in t_lower)
+    ):
+        return True, "network"
+
+    # Default: regular server
+    return False, "server"
+
 
 
 def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None) -> Tuple[bool, str, dict]:
@@ -326,11 +408,19 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
             if primary_group_id:
                 host.group_id = primary_group_id
             host.is_enabled = True
+
+            # Equipment auto-detection (iDRAC, IPMI, NAS, Network, UPS)
+            is_eq, eq_type = detect_equipment_type(template_names, hname, description)
+            if not getattr(host, "is_ignored_manually_set", False):
+                host.is_ignored = is_eq
+                host.device_type = eq_type
         else:
             if vpn_ip:
                 vpn_count += 1
             if vpn_port and vpn_port != 22:
                 custom_port_count += 1
+
+            is_eq, eq_type = detect_equipment_type(template_names, hname, description)
             host = Host(
                 zabbix_hostid=hid,
                 name=hname,
@@ -338,6 +428,9 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
                 ssh_port=vpn_port,
                 is_ip_manually_set=False,
                 is_os_manually_set=False,
+                is_ignored=is_eq,
+                is_ignored_manually_set=False,
+                device_type=eq_type,
                 ip_source=effective_source,
                 zabbix_agent_ip=ip,
                 zabbix_description=description,
@@ -350,10 +443,11 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
             )
             db_session.add(host)
 
-    # Disable hosts that were removed or unmonitored in Zabbix
+    # Disable hosts that were removed or unmonitored in Zabbix (do not disable manual non-Zabbix hosts)
     for hid, host in existing_hosts.items():
         if hid not in seen_hostids:
-            host.is_enabled = False
+            if not str(hid).startswith("manual_"):
+                host.is_enabled = False
 
     # Update ZabbixSetting status
     now = datetime.utcnow()

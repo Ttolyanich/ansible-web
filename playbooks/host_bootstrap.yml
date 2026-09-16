@@ -1,0 +1,128 @@
+---
+- name: Full Host Bootstrap & Onboarding
+  hosts: all
+  gather_facts: false
+  become: true
+
+  vars:
+    bootstrap_timezone: "{{ timezone | default('Asia/Almaty') }}"
+    zabbix_srv: "{{ zabbix_server_ip | default('185.102.74.23') }}"
+
+  tasks:
+    - name: Detect OS package manager
+      ansible.builtin.raw: >
+        if command -v apt-get >/dev/null 2>&1; then echo "apt";
+        elif command -v dnf >/dev/null 2>&1; then echo "dnf";
+        elif command -v yum >/dev/null 2>&1; then echo "yum";
+        else echo "unknown"; fi
+      register: pkg_mgr
+      changed_when: false
+
+    # -------------------------------------------------------------
+    # 1. Base Utilities & Timezone
+    # -------------------------------------------------------------
+    - name: Set timezone
+      ansible.builtin.raw: >
+        timedatectl set-timezone {{ bootstrap_timezone }} 2>/dev/null ||
+        (ln -sf /usr/share/zoneinfo/{{ bootstrap_timezone }} /etc/localtime && echo "{{ bootstrap_timezone }}" > /etc/timezone)
+      changed_when: false
+      failed_when: false
+
+    - name: "[APT] Install base utilities and ca-certificates"
+      when: "'apt' in pkg_mgr.stdout"
+      ansible.builtin.raw: >
+        export DEBIAN_FRONTEND=noninteractive &&
+        apt-get update -qq &&
+        apt-get install -y -qq curl wget sudo tar ca-certificates gnupg htop net-tools
+      changed_when: false
+
+    - name: "[DNF/YUM] Install base utilities and ca-certificates"
+      when: "'dnf' in pkg_mgr.stdout or 'yum' in pkg_mgr.stdout"
+      ansible.builtin.raw: >
+        if command -v dnf >/dev/null 2>&1; then
+          dnf install -y curl wget sudo tar ca-certificates htop net-tools
+        else
+          yum install -y curl wget sudo tar ca-certificates htop net-tools
+        fi
+      changed_when: false
+
+    # -------------------------------------------------------------
+    # 2. Zabbix Agent 2 Installation & Configuration
+    # -------------------------------------------------------------
+    - name: "[APT] Setup Zabbix Repository & Install Zabbix Agent"
+      when: "'apt' in pkg_mgr.stdout and (install_zabbix_agent is not defined or install_zabbix_agent | bool)"
+      ansible.builtin.raw: >
+        . /etc/os-release &&
+        ARCH=$(dpkg --print-architecture) &&
+        (wget -q -O /tmp/zabbix-release.deb "https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.0+ubuntu$(lsb_release -rs 2>/dev/null || echo '22.04')_all.deb" 2>/dev/null ||
+         wget -q -O /tmp/zabbix-release.deb "https://repo.zabbix.com/zabbix/7.0/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.0+debian$(cat /etc/debian_version 2>/dev/null | cut -d. -f1 || echo '12')_all.deb" 2>/dev/null || true) &&
+        (dpkg -i /tmp/zabbix-release.deb >/dev/null 2>&1 || true) &&
+        apt-get update -qq &&
+        (apt-get install -y -qq zabbix-agent2 2>/dev/null || apt-get install -y -qq zabbix-agent 2>/dev/null || true)
+      changed_when: false
+      failed_when: false
+
+    - name: "[DNF/YUM] Setup Zabbix Repository & Install Zabbix Agent"
+      when: "('dnf' in pkg_mgr.stdout or 'yum' in pkg_mgr.stdout) and (install_zabbix_agent is not defined or install_zabbix_agent | bool)"
+      ansible.builtin.raw: >
+        RHEL_VER=$(rpm -E %{rhel} 2>/dev/null || echo '8') &&
+        RPM_URL="https://repo.zabbix.com/zabbix/7.0/rhel/${RHEL_VER}/x86_64/zabbix-release-latest-7.0.el${RHEL_VER}.noarch.rpm" &&
+        (rpm -Uvh --replacepkgs "$RPM_URL" >/dev/null 2>&1 || true) &&
+        (dnf install -y zabbix-agent2 2>/dev/null || yum install -y zabbix-agent2 2>/dev/null || yum install -y zabbix-agent 2>/dev/null || true)
+      changed_when: false
+      failed_when: false
+
+    - name: Configure Zabbix Agent (Server, ServerActive, Hostname)
+      when: install_zabbix_agent is not defined or install_zabbix_agent | bool
+      ansible.builtin.raw: >
+        CONF="";
+        if [ -f /etc/zabbix/zabbix_agent2.conf ]; then CONF="/etc/zabbix/zabbix_agent2.conf";
+        elif [ -f /etc/zabbix/zabbix_agentd.conf ]; then CONF="/etc/zabbix/zabbix_agentd.conf"; fi;
+        if [ -n "$CONF" ]; then
+          sed -i 's/^Server=.*/Server={{ zabbix_srv }}/' "$CONF";
+          sed -i 's/^ServerActive=.*/ServerActive={{ zabbix_srv }}/' "$CONF";
+          sed -i 's/^Hostname=.*/Hostname={{ inventory_hostname }}/' "$CONF";
+          systemctl daemon-reload >/dev/null 2>&1 || true;
+          systemctl enable --now zabbix-agent2 2>/dev/null || systemctl enable --now zabbix-agent 2>/dev/null || true;
+          systemctl restart zabbix-agent2 2>/dev/null || systemctl restart zabbix-agent 2>/dev/null || true;
+          echo "ZABBIX_CONFIGURED";
+        else
+          echo "ZABBIX_CONF_NOT_FOUND";
+        fi
+      register: zabbix_cfg_res
+      changed_when: "'ZABBIX_CONFIGURED' in zabbix_cfg_res.stdout"
+
+    # -------------------------------------------------------------
+    # 3. Target User Provisioning (Optional)
+    # -------------------------------------------------------------
+    - name: Setup target users if provided
+      when: target_users is defined and target_users is iterable and (target_users | length > 0)
+      ansible.builtin.raw: >
+        {% for u in target_users %}
+        (
+          id "{{ u.username }}" >/dev/null 2>&1 || useradd -m -s /bin/bash "{{ u.username }}"
+        ) &&
+        {% if u.password is defined and u.password %}
+        echo "{{ u.username }}:{{ u.password }}" | chpasswd &&
+        {% endif %}
+        {% if u.sudo is not defined or u.sudo %}
+        (echo "{{ u.username }} ALL=(ALL:ALL) NOPASSWD:ALL" > "/etc/sudoers.d/{{ u.username }}" && chmod 0440 "/etc/sudoers.d/{{ u.username }}") &&
+        {% endif %}
+        {% if u.ssh_key is defined and u.ssh_key %}
+        mkdir -p "/home/{{ u.username }}/.ssh" &&
+        chmod 700 "/home/{{ u.username }}/.ssh" &&
+        echo "{{ u.ssh_key }}" > "/home/{{ u.username }}/.ssh/authorized_keys" &&
+        chmod 600 "/home/{{ u.username }}/.ssh/authorized_keys" &&
+        chown -R "{{ u.username }}:{{ u.username }}" "/home/{{ u.username }}/.ssh" &&
+        {% endif %}
+        echo "USER_{{ u.username }}_OK";
+        {% endfor %}
+      register: user_setup_res
+      no_log: true
+
+    - name: Final status summary
+      ansible.builtin.debug:
+        msg: >-
+          Bootstrap completed on {{ inventory_hostname }}.
+          Package Manager: {{ pkg_mgr.stdout | trim }}.
+          Zabbix Agent: {{ (zabbix_cfg_res.stdout | default('SKIPPED')) | trim }}.

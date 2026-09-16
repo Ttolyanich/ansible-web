@@ -29,10 +29,14 @@
                 <p class="text-xs text-slate-400 font-mono mt-1">IP: {{ host.ip_address }}{% if host.ssh_port and host.ssh_port != 22 %}:{{ host.ssh_port }}{% endif %} | Группа: {{ host.group.name if host.group else 'Без группы' }}</p>
             </div>
 
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
+                <button type="button" onclick="openBootstrapModal()" class="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-sm shadow-indigo-900/40" title="Первоначальная настройка, установка Zabbix Agent и пользователей">
+                    <i class="fa-solid fa-rocket"></i>
+                    <span>Раскатка / Onboarding</span>
+                </button>
                 <form action="{{ url_for('run_ping_batch') }}" method="POST">
                     <input type="hidden" name="host_ids" value="{{ host.id }}">
-                    <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1.5">
+                    <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1.5 cursor-pointer">
                         <i class="fa-solid fa-bolt"></i>
                         <span>Проверить SSH</span>
                     </button>
@@ -135,6 +139,57 @@
                     </select>
                     <p class="text-[11px] text-slate-500 mt-1">Если на этом конкретном сервере нестандартный пользователь или ключ — выберите профиль здесь</p>
                 </div>
+
+                <!-- Ignore & Equipment Settings -->
+                <div class="md:col-span-2 bg-slate-950/80 border border-slate-800 p-4 rounded-xl space-y-3">
+                    <div class="flex items-center justify-between flex-wrap gap-2">
+                        <div>
+                            <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider block">Режим спецоборудования (Исключение из SSH)</span>
+                            <span class="text-[11px] text-slate-500">iDRAC, IPMI, iLO, Synology NAS, ИБП и сетевое оборудование опрашиваются по SNMP и исключаются из SSH проверок</span>
+                        </div>
+                        {% if host.is_ignored_manually_set %}
+                            <span class="text-[11px] bg-amber-500/20 text-amber-400 border border-amber-500/40 px-2 py-0.5 rounded font-medium">
+                                <i class="fa-solid fa-lock text-[10px] mr-1"></i>Зафиксировано вручную
+                            </span>
+                        {% else %}
+                            <span class="text-[11px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-medium">
+                                <i class="fa-solid fa-wand-magic-sparkles text-[10px] mr-1"></i>Авто из Zabbix
+                            </span>
+                        {% endif %}
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center pt-2">
+                        <label class="flex items-center gap-2.5 p-3 bg-slate-900 border border-slate-700 rounded-lg cursor-pointer hover:border-slate-600 transition">
+                            <input type="checkbox" name="is_ignored" value="1" {% if host.is_ignored %}checked{% endif %}
+                                   class="text-red-600 focus:ring-red-500 bg-slate-950 border-slate-700 rounded">
+                            <div>
+                                <span class="font-semibold text-white text-xs">Игнорировать при проверках SSH и плейбуках</span>
+                                <p class="text-[10px] text-slate-400">Скрывает из вкладки «Серверы» и пропускает при «Ping all»</p>
+                            </div>
+                        </label>
+
+                        <div>
+                            <label class="block text-slate-400 text-xs font-semibold mb-1">Категория устройства</label>
+                            <select name="device_type" class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:ring-1 focus:ring-red-500">
+                                <option value="server" {% if host.device_type == 'server' %}selected{% endif %}>🖥️ Обычный сервер (Linux/Windows)</option>
+                                <option value="idrac_ipmi" {% if host.device_type == 'idrac_ipmi' %}selected{% endif %}>🔌 iDRAC / IPMI / iLO / BMC</option>
+                                <option value="nas" {% if host.device_type == 'nas' %}selected{% endif %}>💾 Synology / QNAP / NAS Хранилище</option>
+                                <option value="network" {% if host.device_type == 'network' %}selected{% endif %}>🌐 Сетевое оборудование (Switch/Router)</option>
+                                <option value="ups" {% if host.device_type == 'ups' %}selected{% endif %}>🔋 ИБП / UPS / PDU</option>
+                                <option value="printer" {% if host.device_type == 'printer' %}selected{% endif %}>🖨️ Принтер / МФУ</option>
+                                <option value="other" {% if host.device_type == 'other' %}selected{% endif %}>📦 Прочее оборудование</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    {% if host.is_ignored_manually_set %}
+                    <div class="flex justify-end pt-1">
+                        <button type="submit" name="action" value="reset_ignored" class="text-xs text-amber-400 hover:text-amber-300 underline inline-flex items-center gap-1 transition">
+                            <i class="fa-solid fa-rotate-left"></i> Сбросить статус оборудования на автоопределение
+                        </button>
+                    </div>
+                    {% endif %}
+                </div>
             </div>
 
             <!-- Zabbix Information (Read-only) -->
@@ -158,11 +213,92 @@
             </div>
 
             <div class="flex justify-end pt-4 border-t border-slate-800">
-                <button type="submit" class="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white text-sm font-semibold rounded-lg shadow-md transition">
+                <button type="submit" class="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white text-sm font-semibold rounded-lg shadow-md transition cursor-pointer">
                     Сохранить изменения
                 </button>
             </div>
         </form>
     </div>
 </div>
+
+<!-- Modal for Host Bootstrap -->
+<div id="bootstrap-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-3 sm:p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+        <div class="flex justify-between items-center pb-3 border-b border-slate-800">
+            <h3 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-rocket text-indigo-400"></i>
+                <span>Первоначальная настройка: {{ host.name }}</span>
+            </h3>
+            <button type="button" onclick="closeBootstrapModal()" class="text-slate-400 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <form method="POST" action="{{ url_for('bootstrap_host_view', host_id=host.id) }}" class="space-y-4 text-xs">
+            <p class="text-slate-300 leading-relaxed">
+                Этот процесс выполнит первоначальную настройку сервера: установит базовые утилиты (curl, wget, htop), синхронизирует часовой пояс, установит официальный <strong>Zabbix Agent 2</strong> и запустит сервис.
+            </p>
+
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Профиль SSH подключения (для первичного root входа)</label>
+                    <select name="credential_profile_id" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white">
+                        <option value="">-- Текущий профиль хоста --</option>
+                        {% for cp in credential_profiles %}
+                        <option value="{{ cp.id }}">{{ cp.name }} [{{ cp.os_type }} | {{ cp.ssh_user }}]</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Часовой пояс (Timezone)</label>
+                    <input type="text" name="timezone" value="Asia/Almaty" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white font-mono">
+                </div>
+
+                <label class="flex items-center gap-2.5 p-3 bg-slate-950 border border-slate-800 rounded-lg cursor-pointer">
+                    <input type="checkbox" name="install_zabbix_agent" value="1" checked class="text-indigo-600 focus:ring-indigo-500 bg-slate-900 border-slate-700 rounded">
+                    <div>
+                        <span class="font-semibold text-white">Установить и запустить Zabbix Agent 2</span>
+                        <p class="text-[11px] text-slate-400 mt-0.5">Подключит официальный репозиторий Zabbix 7.0 и пропишет конфиг агента.</p>
+                    </div>
+                </label>
+
+                {% if host.zabbix_hostid.startswith('manual_') %}
+                <label class="flex items-center gap-2.5 p-3 bg-slate-950 border border-slate-800 rounded-lg cursor-pointer">
+                    <input type="checkbox" name="register_in_zabbix" value="1" checked class="text-indigo-600 focus:ring-indigo-500 bg-slate-900 border-slate-700 rounded">
+                    <div>
+                        <span class="font-semibold text-white">Зарегистрировать хост в Zabbix</span>
+                        <p class="text-[11px] text-slate-400 mt-0.5">Создаст хост в Zabbix API с привязкой шаблона Linux/Windows agent.</p>
+                    </div>
+                </label>
+                {% endif %}
+            </div>
+
+            <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+                <button type="button" onclick="closeBootstrapModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition cursor-pointer">
+                    Отмена
+                </button>
+                <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg shadow-lg shadow-indigo-900/30 transition cursor-pointer flex items-center gap-1.5">
+                    <i class="fa-solid fa-play"></i>
+                    <span>Запустить раскатку</span>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openBootstrapModal() {
+    document.getElementById('bootstrap-modal').classList.remove('hidden');
+}
+
+function closeBootstrapModal() {
+    document.getElementById('bootstrap-modal').classList.add('hidden');
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeBootstrapModal();
+});
+document.getElementById('bootstrap-modal')?.addEventListener('click', function(e) {
+    if (e.target === this) closeBootstrapModal();
+});
+</script>
 {% endblock %}
