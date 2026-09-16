@@ -41,6 +41,12 @@
                             <i class="fa-solid fa-stop"></i> <span>Прервать задачу</span>
                         </button>
                     </form>
+                    {% else %}
+                    <form action="{{ url_for('delete_task_view', task_id=task.id) }}" method="POST" onsubmit="return confirm('Удалить задачу #{{ task.id }} из истории?');" class="inline shrink-0">
+                        <button type="submit" class="px-2.5 py-1 bg-slate-800 hover:bg-red-950/80 text-slate-400 hover:text-red-300 text-[11px] font-semibold rounded border border-slate-700 hover:border-red-800 transition flex items-center gap-1 cursor-pointer">
+                            <i class="fa-solid fa-trash-can"></i> <span>Удалить задачу</span>
+                        </button>
+                    </form>
                     {% endif %}
                 </div>
                 <h1 class="text-lg sm:text-xl font-bold text-white tracking-tight break-words leading-snug">{{ task.summary }}</h1>

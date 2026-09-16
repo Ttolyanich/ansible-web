@@ -9,13 +9,23 @@
             <h1 class="text-xl font-bold text-white tracking-tight flex items-center gap-2">
                 <i class="fa-solid fa-list-check text-red-500"></i> <span>Журнал фоновых задач Ansible</span>
             </h1>
-            <p class="text-xs text-slate-400 mt-0.5">Всего записей: {{ tasks|length }}</p>
+            <p class="text-xs text-slate-400 mt-0.5">
+                Всего в истории: <strong class="text-slate-200">{{ total_count }}</strong>
+                {% if tasks|length < total_count %}(показано {{ tasks|length }}){% endif %}
+                {% if db_size_mb %} | Размер БД: <strong class="text-amber-400 font-mono">{{ db_size_mb }} МБ</strong>{% endif %}
+            </p>
         </div>
 
-        <a href="{{ url_for('tasks_view') }}" class="w-full sm:w-auto justify-center px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
-            <i class="fa-solid fa-rotate-right"></i>
-            <span>Обновить статус</span>
-        </a>
+        <div class="flex items-center gap-2 w-full sm:w-auto flex-wrap">
+            <button type="button" onclick="openCleanupModal()" class="flex-1 sm:flex-initial justify-center px-3.5 py-2 bg-red-950/40 hover:bg-red-900/60 text-red-300 hover:text-white text-xs font-semibold rounded-lg border border-red-800/80 transition flex items-center gap-1.5 cursor-pointer">
+                <i class="fa-solid fa-broom"></i>
+                <span>Очистка истории / логов</span>
+            </button>
+            <a href="{{ url_for('tasks_view') }}" class="flex-1 sm:flex-initial justify-center px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+                <i class="fa-solid fa-rotate-right"></i>
+                <span>Обновить</span>
+            </a>
+        </div>
     </div>
 
     <div class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
@@ -75,10 +85,19 @@
                             {% endif %}
                         </td>
                         <td class="py-3.5 px-4 text-xs text-slate-400">{{ task.created_at.strftime('%d.%m.%Y %H:%M:%S') }}</td>
-                        <td class="py-3.5 px-4 text-right">
-                            <a href="{{ url_for('task_detail', task_id=task.id) }}" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition">
-                                Подробнее
-                            </a>
+                        <td class="py-3.5 px-4 text-right whitespace-nowrap">
+                            <div class="flex items-center justify-end gap-1.5">
+                                <a href="{{ url_for('task_detail', task_id=task.id) }}" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition">
+                                    Подробнее
+                                </a>
+                                {% if task.status not in ('running', 'pending') %}
+                                <form action="{{ url_for('delete_task_view', task_id=task.id) }}" method="POST" onsubmit="return confirm('Удалить задачу #{{ task.id }} из истории?');" class="inline">
+                                    <button type="submit" title="Удалить задачу" class="px-2 py-1 rounded bg-slate-800 hover:bg-red-950/80 text-slate-400 hover:text-red-400 text-xs transition border border-transparent hover:border-red-800 cursor-pointer">
+                                        <i class="fa-solid fa-trash-can"></i>
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
                         </td>
                     </tr>
                     {% else %}
@@ -91,4 +110,113 @@
         </div>
     </div>
 </div>
+
+<!-- Modal for Task & Log Cleanup -->
+<div id="cleanup-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm hidden z-50 flex items-center justify-center p-3 sm:p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+        <div class="flex justify-between items-center pb-3 border-b border-slate-800">
+            <h3 class="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-broom text-red-500"></i>
+                <span>Очистка логов и истории задач</span>
+            </h3>
+            <button type="button" onclick="closeCleanupModal()" class="text-slate-400 hover:text-white cursor-pointer"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <form method="POST" action="{{ url_for('cleanup_tasks_view') }}" class="space-y-4 text-xs" onsubmit="return confirmCleanup();">
+            <p class="text-slate-300 leading-relaxed">
+                Со временем детальные логи выполнения Ansible занимают значительное место в базе данных. Выберите желаемый режим очистки:
+            </p>
+
+            <div class="space-y-2.5">
+                <label class="flex items-start gap-3 p-3 bg-slate-950/80 border border-slate-800 rounded-lg hover:border-slate-700 cursor-pointer transition">
+                    <input type="radio" name="mode" value="logs_only" checked class="mt-0.5 text-red-600 focus:ring-red-500 bg-slate-900 border-slate-700">
+                    <div>
+                        <div class="font-semibold text-white flex items-center gap-2">
+                            <span>Очистить только текст логов</span>
+                            <span class="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">Рекомендуется</span>
+                        </div>
+                        <p class="text-[11px] text-slate-400 mt-0.5">
+                            Сохраняет саму историю запусков, даты, инициаторов, статусы и детальную статистику по хостам, но удаляет многостраничные простыни вывода консоли. Освобождает до 99% места в базе.
+                        </p>
+                    </div>
+                </label>
+
+                <label class="flex items-start gap-3 p-3 bg-slate-950/80 border border-slate-800 rounded-lg hover:border-slate-700 cursor-pointer transition">
+                    <input type="radio" name="mode" value="older_7d" class="mt-0.5 text-red-600 focus:ring-red-500 bg-slate-900 border-slate-700">
+                    <div>
+                        <div class="font-semibold text-white">Удалить завершенные задачи старше 7 дней</div>
+                        <p class="text-[11px] text-slate-400 mt-0.5">
+                            Полностью удаляет завершенные задачи старше 1 недели. Задачи за последние 7 дней остаются нетронутыми.
+                        </p>
+                    </div>
+                </label>
+
+                <label class="flex items-start gap-3 p-3 bg-slate-950/80 border border-slate-800 rounded-lg hover:border-slate-700 cursor-pointer transition">
+                    <input type="radio" name="mode" value="older_30d" class="mt-0.5 text-red-600 focus:ring-red-500 bg-slate-900 border-slate-700">
+                    <div>
+                        <div class="font-semibold text-white">Удалить завершенные задачи старше 30 дней</div>
+                        <p class="text-[11px] text-slate-400 mt-0.5">
+                            Удаляет все завершенные задачи старше одного месяца.
+                        </p>
+                    </div>
+                </label>
+
+                <label class="flex items-start gap-3 p-3 bg-slate-950/80 border border-slate-800 rounded-lg hover:border-slate-700 cursor-pointer transition">
+                    <input type="radio" name="mode" value="all_completed" class="mt-0.5 text-red-600 focus:ring-red-500 bg-slate-900 border-slate-700">
+                    <div>
+                        <div class="font-semibold text-red-400">Удалить ВСЕ завершенные задачи</div>
+                        <p class="text-[11px] text-slate-400 mt-0.5">
+                            Полностью очищает историю завершенных, ошибочных и отмененных задач.
+                        </p>
+                    </div>
+                </label>
+            </div>
+
+            <div class="p-3 bg-blue-950/40 border border-blue-900/60 rounded-lg text-[11px] text-blue-300 flex items-start gap-2">
+                <i class="fa-solid fa-shield-halved text-blue-400 mt-0.5"></i>
+                <span>Задачи, которые в данный момент находятся в процессе выполнения (LIVE), защищены и ни при каких условиях не будут затронуты. После очистки база данных SQLite автоматически оптимизируется (VACUUM).</span>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+                <button type="button" onclick="closeCleanupModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition cursor-pointer">
+                    Отмена
+                </button>
+                <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg shadow-lg shadow-red-900/30 transition cursor-pointer flex items-center gap-1.5">
+                    <i class="fa-solid fa-broom"></i>
+                    <span>Выполнить очистку</span>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openCleanupModal() {
+    document.getElementById('cleanup-modal').classList.remove('hidden');
+}
+
+function closeCleanupModal() {
+    document.getElementById('cleanup-modal').classList.add('hidden');
+}
+
+function confirmCleanup() {
+    const mode = document.querySelector('input[name="mode"]:checked').value;
+    let msg = "Подтвердите очистку логов завершенных задач?";
+    if (mode === "all_completed") {
+        msg = "ВНИМАНИЕ: Вы действительно хотите удалить ВСЕ завершенные задачи из истории?";
+    } else if (mode === "older_7d") {
+        msg = "Удалить все завершенные задачи старше 7 дней?";
+    } else if (mode === "older_30d") {
+        msg = "Удалить все завершенные задачи старше 30 дней?";
+    }
+    return confirm(msg);
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeCleanupModal();
+});
+document.getElementById('cleanup-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeCleanupModal();
+});
+</script>
 {% endblock %}

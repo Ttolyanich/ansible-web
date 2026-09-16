@@ -1,9 +1,10 @@
 import os
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 import yaml
+from sqlalchemy import text
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, abort, send_from_directory
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from dotenv import load_dotenv
@@ -974,11 +975,96 @@ def playbook_run_post(filename):
 # -------------------------------------------------------------
 # Tasks & Execution Logs
 # -------------------------------------------------------------
+def run_db_vacuum():
+    """Run VACUUM on SQLite database to release unused space to OS."""
+    try:
+        db.session.commit()
+        with db.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(text("VACUUM"))
+    except Exception as ex:
+        app.logger.warning(f"Database VACUUM error: {ex}")
+
+
 @app.route("/tasks")
 @login_required
 def tasks_view():
-    tasks = TaskJob.query.order_by(TaskJob.id.desc()).limit(100).all()
-    return render_template("tasks.html", tasks=tasks)
+    total_count = TaskJob.query.count()
+    tasks = TaskJob.query.order_by(TaskJob.id.desc()).limit(150).all()
+    
+    db_size_mb = None
+    try:
+        instance_dir = os.path.join(os.path.dirname(__file__), "instance")
+        db_file = os.path.join(instance_dir, "ansible_web.db")
+        if os.path.exists(db_file):
+            db_size_mb = round(os.path.getsize(db_file) / (1024 * 1024), 1)
+    except Exception:
+        pass
+
+    return render_template("tasks.html", tasks=tasks, total_count=total_count, db_size_mb=db_size_mb)
+
+
+@app.route("/tasks/cleanup", methods=["POST"])
+@login_required
+def cleanup_tasks_view():
+    cleanup_mode = request.form.get("mode", "logs_only")
+    finished_statuses = ["success", "failed", "partial", "canceled"]
+    
+    if cleanup_mode == "logs_only":
+        updated = TaskJob.query.filter(
+            TaskJob.status.in_(finished_statuses),
+            TaskJob.log_output != "[Лог очищен для освобождения места]"
+        ).update({"log_output": "[Лог очищен для освобождения места]"}, synchronize_session=False)
+        db.session.commit()
+        run_db_vacuum()
+        flash(f"Логи очищены для {updated} завершенных задач. Дисковое пространство освобождено.", "success")
+        
+    elif cleanup_mode == "older_7d":
+        cutoff = datetime.utcnow() - timedelta(days=7)
+        deleted = TaskJob.query.filter(
+            TaskJob.status.in_(finished_statuses),
+            TaskJob.created_at < cutoff
+        ).delete(synchronize_session=False)
+        db.session.commit()
+        run_db_vacuum()
+        flash(f"Удалено {deleted} старых задач (старше 7 дней).", "success")
+
+    elif cleanup_mode == "older_30d":
+        cutoff = datetime.utcnow() - timedelta(days=30)
+        deleted = TaskJob.query.filter(
+            TaskJob.status.in_(finished_statuses),
+            TaskJob.created_at < cutoff
+        ).delete(synchronize_session=False)
+        db.session.commit()
+        run_db_vacuum()
+        flash(f"Удалено {deleted} старых задач (старше 30 дней).", "success")
+
+    elif cleanup_mode == "all_completed":
+        deleted = TaskJob.query.filter(
+            TaskJob.status.in_(finished_statuses)
+        ).delete(synchronize_session=False)
+        db.session.commit()
+        run_db_vacuum()
+        flash(f"Все завершенные задачи ({deleted} шт.) удалены из истории.", "success")
+        
+    else:
+        flash("Неизвестный режим очистки.", "warning")
+        
+    return redirect(url_for("tasks_view"))
+
+
+@app.route("/tasks/<int:task_id>/delete", methods=["POST"])
+@login_required
+def delete_task_view(task_id):
+    task = db.get_or_404(TaskJob, task_id)
+    if task.status in ("running", "pending"):
+        flash(f"Нельзя удалить активную задачу #{task.id}. Сначала прервите её выполнение.", "error")
+        return redirect(url_for("task_detail", task_id=task.id))
+    
+    db.session.delete(task)
+    db.session.commit()
+    run_db_vacuum()
+    flash(f"Задача #{task_id} успешно удалена из истории.", "success")
+    return redirect(url_for("tasks_view"))
 
 @app.route("/tasks/<int:task_id>")
 @login_required
