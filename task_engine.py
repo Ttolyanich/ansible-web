@@ -789,7 +789,32 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
         pending_hosts = {h.name: h for h in hosts}
         host_attempt_indices = {h.name: 0 for h in hosts}
         final_results = {}
-        aggregated_logs = []
+        aggregated_logs = [task.log_output] if task.log_output else []
+
+        # Collect secrets that should never appear in log outputs
+        secret_mask_set = set()
+        if extra_vars:
+            tp = extra_vars.get("target_password")
+            if tp and str(tp).strip():
+                secret_mask_set.add(str(tp).strip())
+            for u in extra_vars.get("target_users", []):
+                if isinstance(u, dict) and u.get("password") and str(u["password"]).strip():
+                    secret_mask_set.add(str(u["password"]).strip())
+        for cands in host_candidates.values():
+            for c in cands:
+                if c.get("password") and str(c["password"]).strip():
+                    secret_mask_set.add(str(c["password"]).strip())
+                if c.get("passphrase") and str(c["passphrase"]).strip():
+                    secret_mask_set.add(str(c["passphrase"]).strip())
+
+        secret_mask_set = {s for s in secret_mask_set if len(s) >= 3}
+
+        def sanitize_log_text(text: str) -> str:
+            if not text or not secret_mask_set:
+                return text
+            for sec in secret_mask_set:
+                text = text.replace(sec, "********")
+            return text
 
         pass_num = 1
         max_passes = 6
@@ -881,6 +906,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                             if not line and proc.poll() is not None:
                                 break
                             if line:
+                                line = sanitize_log_text(line)
                                 pass_chunks.append(line)
 
                             now = time.time()

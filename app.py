@@ -234,9 +234,14 @@ def host_detail(host_id):
         # SSH Port override
         raw_port = request.form.get("ssh_port", "").strip()
         if raw_port and raw_port.isdigit():
-            host.ssh_port = int(raw_port)
+            new_port = int(raw_port)
+            if host.ssh_port != new_port:
+                host.ssh_port = new_port
+                host.is_ip_manually_set = True
+                host.ip_source = "manual"
         elif raw_port == "":
-            host.ssh_port = None
+            if host.ssh_port is not None:
+                host.ssh_port = None
 
         new_os = request.form.get("os_type", host.os_type)
         if new_os and new_os != host.os_type:

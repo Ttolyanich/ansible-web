@@ -11,6 +11,7 @@
             target_users if (target_users is defined and target_users is iterable and target_users | length > 0)
             else [{'username': target_username, 'ssh_key': target_ssh_key | default(''), 'sudo': target_sudo | default(true) | bool, 'password': target_password | default('')}]
           }}
+      no_log: true
 
     # -------------------------------------------------------------
     # LINUX TARGETS
@@ -33,6 +34,7 @@
       register: linux_user_res
       changed_when: false
       failed_when: false
+      no_log: true
 
     - name: "[Linux] Setup SSH authorized_keys"
       when: 
@@ -96,6 +98,7 @@
       loop: "{{ effective_users }}"
       register: win_user_res
       changed_when: "'command completed successfully' in win_user_res.stdout | lower or win_user_res.rc == 0"
+      no_log: true
 
     - name: "[Windows] Add user to local Administrators group"
       when: 

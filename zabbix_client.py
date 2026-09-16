@@ -300,7 +300,7 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
             host.zabbix_description = description
             host.proxy_hostid = proxy_hostid
 
-            # Only overwrite IP if it was NOT manually set by user
+            # Only overwrite IP/port if it was NOT manually set by user
             if host.is_ip_manually_set:
                 manual_ip_count += 1
                 host.ip_source = "manual"
@@ -309,10 +309,9 @@ def sync_zabbix_to_db(db_session, zabbix_setting, user_id: Optional[int] = None)
                 host.ip_source = effective_source
                 if vpn_ip:
                     vpn_count += 1
-
-            # Update SSH port if detected in comment
-            if vpn_port:
-                host.ssh_port = vpn_port
+                # Update SSH port if detected in comment and not manually locked
+                if vpn_port:
+                    host.ssh_port = vpn_port
 
             if host.ssh_port and host.ssh_port != 22:
                 custom_port_count += 1
