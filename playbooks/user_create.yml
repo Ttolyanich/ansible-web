@@ -14,132 +14,102 @@
       no_log: true
 
     # -------------------------------------------------------------
-    # LINUX TARGETS
+    # LINUX TARGETS (Single atomic SSH session to avoid connection flood / UFW rate limits)
     # -------------------------------------------------------------
-    - name: "[Linux] Ensure users exist with home directory and password"
+    - name: "[Linux] Ensure users, authorized_keys, bashrc and sudoers"
       when: os_type | default('linux') == 'linux'
       ansible.builtin.raw: >
         sh -c '
-        if ! id "{{ item.username }}" >/dev/null 2>&1; then
-          useradd -m -s /bin/bash "{{ item.username }}" 2>/dev/null || \
-          useradd -m "{{ item.username }}" 2>/dev/null || \
-          adduser -D -s /bin/bash "{{ item.username }}" 2>/dev/null || \
-          adduser -D "{{ item.username }}" 2>/dev/null || true;
+        {% for u in effective_users %}
+        # 1. User creation
+        if ! id "{{ u.username }}" >/dev/null 2>&1; then
+          useradd -m -s /bin/bash "{{ u.username }}" 2>/dev/null || \
+          useradd -m "{{ u.username }}" 2>/dev/null || \
+          adduser -D -s /bin/bash "{{ u.username }}" 2>/dev/null || \
+          adduser -D "{{ u.username }}" 2>/dev/null || true;
         fi;
-        {% if item.password is defined and item.password | length > 0 %}
-        echo "{{ item.username }}:{{ item.password }}" | chpasswd 2>/dev/null || echo "{{ item.password }}" | passwd --stdin "{{ item.username }}" 2>/dev/null || true;
+        {% if u.password is defined and u.password | length > 0 %}
+        echo "{{ u.username }}:{{ u.password }}" | chpasswd 2>/dev/null || echo "{{ u.password }}" | passwd --stdin "{{ u.username }}" 2>/dev/null || true;
         {% endif %}
-        '
-      loop: "{{ effective_users }}"
-      register: linux_user_res
-      changed_when: false
-      failed_when: false
-      no_log: true
 
-    - name: "[Linux] Setup SSH authorized_keys"
-      when: 
-        - os_type | default('linux') == 'linux'
-        - item.ssh_key is defined
-        - item.ssh_key | trim | length > 0
-      ansible.builtin.raw: >
-        sh -c '
-        USER_DIR=$(getent passwd "{{ item.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ item.username }}");
-        [ -z "$USER_DIR" ] && USER_DIR="/home/{{ item.username }}";
-        mkdir -p "$USER_DIR/.ssh" 2>/dev/null;
-        chmod 700 "$USER_DIR/.ssh" 2>/dev/null;
-        touch "$USER_DIR/.ssh/authorized_keys" 2>/dev/null;
-        chmod 600 "$USER_DIR/.ssh/authorized_keys" 2>/dev/null;
-        echo "{{ item.ssh_key | trim }}" | while IFS= read -r kline || [ -n "$kline" ]; do
-          [ -z "$kline" ] && continue
-          if ! grep -qF "$kline" "$USER_DIR/.ssh/authorized_keys" 2>/dev/null; then
-            echo "$kline" >> "$USER_DIR/.ssh/authorized_keys"
-          fi
-        done;
-        chown -R "{{ item.username }}" "$USER_DIR/.ssh" 2>/dev/null || true;
-        chown "{{ item.username }}" "$USER_DIR" 2>/dev/null || true;
-        chmod 750 "$USER_DIR" 2>/dev/null || chmod 755 "$USER_DIR" 2>/dev/null || true;
-        '
-      loop: "{{ effective_users }}"
-      register: linux_key_res
-      changed_when: false
-      failed_when: false
+        U_DIR=$(getent passwd "{{ u.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ u.username }}");
+        [ -z "$U_DIR" ] && U_DIR="/home/{{ u.username }}";
+        mkdir -p "$U_DIR" 2>/dev/null;
 
-    - name: "[Linux] Setup user shell, bashrc, and color prompt"
-      when: os_type | default('linux') == 'linux'
-      ansible.builtin.raw: >
-        sh -c '
-        USER_DIR=$(getent passwd "{{ item.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ item.username }}");
-        [ -z "$USER_DIR" ] && USER_DIR="/home/{{ item.username }}";
-        mkdir -p "$USER_DIR" 2>/dev/null;
-
-        # Ensure shell is bash if available
+        # 2. Shell & Environment (.bashrc, .profile, colors, aliases)
         if command -v bash >/dev/null 2>&1; then
           BASH_PATH="$(command -v bash)";
-          usermod -s "$BASH_PATH" "{{ item.username }}" 2>/dev/null || chsh -s "$BASH_PATH" "{{ item.username }}" 2>/dev/null || true;
+          usermod -s "$BASH_PATH" "{{ u.username }}" 2>/dev/null || chsh -s "$BASH_PATH" "{{ u.username }}" 2>/dev/null || true;
+        fi;
+        if [ ! -f "$U_DIR/.bashrc" ] && [ -f /etc/skel/.bashrc ]; then
+          cp -a /etc/skel/.bashrc "$U_DIR/.bashrc" 2>/dev/null || true;
+        fi;
+        if [ ! -f "$U_DIR/.profile" ] && [ -f /etc/skel/.profile ]; then
+          cp -a /etc/skel/.profile "$U_DIR/.profile" 2>/dev/null || true;
+        fi;
+        if [ ! -f "$U_DIR/.bash_logout" ] && [ -f /etc/skel/.bash_logout ]; then
+          cp -a /etc/skel/.bash_logout "$U_DIR/.bash_logout" 2>/dev/null || true;
+        fi;
+        if [ ! -s "$U_DIR/.bashrc" ]; then
+          echo "[ -z \"\$PS1\" ] && return" > "$U_DIR/.bashrc";
+          echo "shopt -s checkwinsize 2>/dev/null" >> "$U_DIR/.bashrc";
+          echo "shopt -s histappend 2>/dev/null" >> "$U_DIR/.bashrc";
+          echo "HISTCONTROL=ignoreboth" >> "$U_DIR/.bashrc";
+          echo "HISTSIZE=10000" >> "$U_DIR/.bashrc";
+          echo "HISTFILESIZE=20000" >> "$U_DIR/.bashrc";
+        fi;
+        sed -i "s/^#force_color_prompt=yes/force_color_prompt=yes/" "$U_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias ll=/alias ll=/" "$U_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias la=/alias la=/" "$U_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias l=/alias l=/" "$U_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias grep=/alias grep=/" "$U_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias fgrep=/alias fgrep=/" "$U_DIR/.bashrc" 2>/dev/null || true;
+        sed -i "s/^#alias egrep=/alias egrep=/" "$U_DIR/.bashrc" 2>/dev/null || true;
+        if ! grep -q "033\[01;" "$U_DIR/.bashrc" 2>/dev/null && ! grep -q "force_color_prompt" "$U_DIR/.bashrc" 2>/dev/null; then
+          echo "alias ls=\"ls --color=auto\"" >> "$U_DIR/.bashrc";
+          echo "alias ll=\"ls -laF --color=auto\"" >> "$U_DIR/.bashrc";
+          echo "alias grep=\"grep --color=auto\"" >> "$U_DIR/.bashrc";
+          echo "if [ \"\$(id -u)\" -eq 0 ]; then" >> "$U_DIR/.bashrc";
+          echo "  PS1=\"\\[\\033[01;31m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]# \"" >> "$U_DIR/.bashrc";
+          echo "else" >> "$U_DIR/.bashrc";
+          echo "  PS1=\"\\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ \"" >> "$U_DIR/.bashrc";
+          echo "fi" >> "$U_DIR/.bashrc";
+        fi;
+        if [ ! -f "$U_DIR/.profile" ]; then
+          echo "if [ -n \"\$BASH_VERSION\" ] && [ -f \"\$HOME/.bashrc\" ]; then . \"\$HOME/.bashrc\"; fi" > "$U_DIR/.profile";
         fi;
 
-        # Copy skeleton files if missing
-        if [ ! -f "$USER_DIR/.bashrc" ] && [ -f /etc/skel/.bashrc ]; then
-          cp -a /etc/skel/.bashrc "$USER_DIR/.bashrc" 2>/dev/null || true;
-        fi;
-        if [ ! -f "$USER_DIR/.profile" ] && [ -f /etc/skel/.profile ]; then
-          cp -a /etc/skel/.profile "$USER_DIR/.profile" 2>/dev/null || true;
-        fi;
-        if [ ! -f "$USER_DIR/.bash_logout" ] && [ -f /etc/skel/.bash_logout ]; then
-          cp -a /etc/skel/.bash_logout "$USER_DIR/.bash_logout" 2>/dev/null || true;
-        fi;
+        # 3. SSH authorized_keys
+        {% if u.ssh_key is defined and u.ssh_key | trim | length > 0 %}
+        mkdir -p "$U_DIR/.ssh" 2>/dev/null;
+        chmod 700 "$U_DIR/.ssh" 2>/dev/null;
+        touch "$U_DIR/.ssh/authorized_keys" 2>/dev/null;
+        chmod 600 "$U_DIR/.ssh/authorized_keys" 2>/dev/null;
+        cat << '\''EOF_KEY_{{ loop.index }}'\'' | while IFS= read -r kline || [ -n "$kline" ]; do
+{{ u.ssh_key | trim }}
+EOF_KEY_{{ loop.index }}
+          [ -z "$kline" ] && continue
+          case "$kline" in
+            \#*) continue ;;
+          esac
+          if ! grep -qF "$kline" "$U_DIR/.ssh/authorized_keys" 2>/dev/null; then
+            echo "$kline" >> "$U_DIR/.ssh/authorized_keys"
+          fi
+        done;
+        chown -R "{{ u.username }}" "$U_DIR/.ssh" 2>/dev/null || true;
+        {% endif %}
 
-        # If .bashrc is still missing (distro without skel / Alpine / bare container), create a clean one
-        if [ ! -s "$USER_DIR/.bashrc" ]; then
-          echo "[ -z \"\$PS1\" ] && return" > "$USER_DIR/.bashrc";
-          echo "shopt -s checkwinsize 2>/dev/null" >> "$USER_DIR/.bashrc";
-          echo "shopt -s histappend 2>/dev/null" >> "$USER_DIR/.bashrc";
-          echo "HISTCONTROL=ignoreboth" >> "$USER_DIR/.bashrc";
-          echo "HISTSIZE=10000" >> "$USER_DIR/.bashrc";
-          echo "HISTFILESIZE=20000" >> "$USER_DIR/.bashrc";
-        fi;
+        UG="$(id -gn "{{ u.username }}" 2>/dev/null || echo "{{ u.username }}")";
+        chown "$U_DIR" 2>/dev/null || true;
+        chown "{{ u.username }}:$UG" "$U_DIR/.bashrc" "$U_DIR/.profile" "$U_DIR/.bash_logout" 2>/dev/null || chown "{{ u.username }}" "$U_DIR/.bashrc" "$U_DIR/.profile" "$U_DIR/.bash_logout" 2>/dev/null || true;
+        chmod 644 "$U_DIR/.bashrc" "$U_DIR/.profile" "$U_DIR/.bash_logout" 2>/dev/null || true;
+        chmod 750 "$U_DIR" 2>/dev/null || chmod 755 "$U_DIR" 2>/dev/null || true;
 
-        # Enable force_color_prompt and common aliases in bashrc
-        sed -i "s/^#force_color_prompt=yes/force_color_prompt=yes/" "$USER_DIR/.bashrc" 2>/dev/null || true;
-        sed -i "s/^#alias ll=/alias ll=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
-        sed -i "s/^#alias la=/alias la=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
-        sed -i "s/^#alias l=/alias l=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
-        sed -i "s/^#alias grep=/alias grep=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
-        sed -i "s/^#alias fgrep=/alias fgrep=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
-        sed -i "s/^#alias egrep=/alias egrep=/" "$USER_DIR/.bashrc" 2>/dev/null || true;
+        echo "USER_{{ u.username }}_CONFIGURED";
+        {% endfor %}
 
-        # Ensure color PS1 exists if not already present (for CentOS/RHEL/minimal distros)
-        if ! grep -q "033\[01;" "$USER_DIR/.bashrc" 2>/dev/null && ! grep -q "force_color_prompt" "$USER_DIR/.bashrc" 2>/dev/null; then
-          echo "alias ls=\"ls --color=auto\"" >> "$USER_DIR/.bashrc";
-          echo "alias ll=\"ls -laF --color=auto\"" >> "$USER_DIR/.bashrc";
-          echo "alias grep=\"grep --color=auto\"" >> "$USER_DIR/.bashrc";
-          echo "if [ \"\$(id -u)\" -eq 0 ]; then" >> "$USER_DIR/.bashrc";
-          echo "  PS1=\"\\[\\033[01;31m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]# \"" >> "$USER_DIR/.bashrc";
-          echo "else" >> "$USER_DIR/.bashrc";
-          echo "  PS1=\"\\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ \"" >> "$USER_DIR/.bashrc";
-          echo "fi" >> "$USER_DIR/.bashrc";
-        fi;
-
-        # Ensure ~/.profile sources ~/.bashrc
-        if [ ! -f "$USER_DIR/.profile" ]; then
-          echo "if [ -n \"\$BASH_VERSION\" ] && [ -f \"\$HOME/.bashrc\" ]; then . \"\$HOME/.bashrc\"; fi" > "$USER_DIR/.profile";
-        fi;
-
-        UG="\$(id -gn \"{{ item.username }}\" 2>/dev/null || echo \"{{ item.username }}\")";
-        chown \"{{ item.username }}:\$UG\" "$USER_DIR/.bashrc" "$USER_DIR/.profile" "$USER_DIR/.bash_logout" 2>/dev/null || chown \"{{ item.username }}\" "$USER_DIR/.bashrc" "$USER_DIR/.profile" "$USER_DIR/.bash_logout" 2>/dev/null || true;
-        chmod 644 "$USER_DIR/.bashrc" "$USER_DIR/.profile" "$USER_DIR/.bash_logout" 2>/dev/null || true;
-        '
-      loop: "{{ effective_users }}"
-      register: linux_bashrc_res
-      changed_when: false
-      failed_when: false
-
-    - name: "[Linux] Configure sudoers and administrator privileges"
-      when: 
-        - os_type | default('linux') == 'linux'
-        - effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0
-      ansible.builtin.raw: >
-        sh -c '
+        # 4. Sudoers
+        {% if effective_users | selectattr('sudo', 'defined') | selectattr('sudo', 'equalto', true) | list | length > 0 %}
         command -v sudo >/dev/null 2>&1 || ( (command -v apt-get >/dev/null 2>&1 && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo) || (command -v yum >/dev/null 2>&1 && yum install -y sudo) || (command -v dnf >/dev/null 2>&1 && dnf install -y sudo) || (command -v apk >/dev/null 2>&1 && apk add sudo) );
         mkdir -p /etc/sudoers.d 2>/dev/null && chmod 750 /etc/sudoers.d 2>/dev/null;
         grep -q "includedir /etc/sudoers.d" /etc/sudoers 2>/dev/null || echo "#includedir /etc/sudoers.d" >> /etc/sudoers;
@@ -150,10 +120,12 @@
         usermod -a -G sudo "{{ u.username }}" 2>/dev/null || usermod -a -G wheel "{{ u.username }}" 2>/dev/null || true;
         {% endif %}
         {% endfor %}
+        {% endif %}
         '
-      register: linux_sudo_res
-      failed_when: false
+      register: linux_provision_res
       changed_when: false
+      failed_when: false
+      no_log: true
 
     # -------------------------------------------------------------
     # WINDOWS TARGETS (via OpenSSH)
