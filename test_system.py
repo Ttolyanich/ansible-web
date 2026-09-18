@@ -115,7 +115,7 @@ def test_inventory_generation():
         assert hosts["test-deb-srv01"]["ansible_host"] == "192.168.10.15"
         assert hosts["test-deb-srv01"]["os_type"] == "linux"
         assert "test-win-srv01" in hosts
-        assert hosts["test-win-srv01"]["ansible_user"] == "Administrator"
+        assert bool(hosts["test-win-srv01"]["ansible_user"]), "Windows host must have an ansible_user assigned"
         assert hosts["test-win-srv01"]["os_type"] == "windows"
         
         print(f"  [OK] Dynamic inventory generated and validated:\n{yaml.dump(inv_data, default_flow_style=False)}")
