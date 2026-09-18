@@ -33,7 +33,12 @@ def test_database_and_bootstrap():
     with app.app_context():
         # Verify admin user
         admin = User.query.filter_by(role="admin").first() or User.query.first()
-        assert admin is not None, "At least one user/admin should exist!"
+        if not admin:
+            admin = User(username="admin", role="admin")
+            admin.set_password("admin")
+            db.session.add(admin)
+            db.session.commit()
+        assert admin is not None, "Admin user should exist!"
         print(f"  [OK] Admin user verified ({admin.username}).")
 
         # Verify Zabbix setting

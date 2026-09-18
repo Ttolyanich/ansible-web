@@ -24,4 +24,5 @@ services:
       - ./static:/app/static
       - ./ansible.cfg:/app/ansible.cfg
       - ./openssl_legacy.cnf:/app/openssl_legacy.cnf
+      - ./test_system.py:/app/test_system.py
 
