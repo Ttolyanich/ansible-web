@@ -166,7 +166,8 @@ def test_vpn_extraction_and_manual_override():
     # Test parser
     assert extract_vpn_ip_from_comment("VPN: 10.0.0.10") == "10.0.0.10"
     assert extract_vpn_ip_from_comment("Хост за прокси. впн: 10.0.1.5") == "10.0.1.5"
-    assert extract_vpn_ip_from_comment("10.0.0.12") == "10.0.0.12"
+    assert extract_vpn_ip_from_comment("10.0.0.12") is None  # Bare IP without explicit prefix must NOT override
+    assert extract_vpn_ip_from_comment("IP: 10.0.0.12") == "10.0.0.12"
     assert extract_vpn_ip_from_comment("WireGuard 10.10.0.44") == "10.10.0.44"
     assert extract_vpn_ip_from_comment("IP VPN: 172.16.20.5") == "172.16.20.5"
     assert extract_vpn_ip_from_comment("127.0.0.1") is None
