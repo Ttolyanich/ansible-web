@@ -146,17 +146,20 @@
           $u = '{{ item.username }}'
           $p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ item.password | b64encode }}'))
           $configured = $false
+          $lastError = ''
           if (Get-Command -Name 'Get-LocalUser' -ErrorAction SilentlyContinue) {
             try {
               $sec = ConvertTo-SecureString $p -AsPlainText -Force
               $existing = Get-LocalUser -Name $u -ErrorAction SilentlyContinue
               if ($existing) {
-                Set-LocalUser -Name $u -Password $sec -PasswordNeverExpires $true -AccountNeverExpires $true -ErrorAction Stop
+                Set-LocalUser -Name $u -Password $sec -PasswordNeverExpires:$true -AccountNeverExpires:$true -ErrorAction Stop
               } else {
-                New-LocalUser -Name $u -Password $sec -PasswordNeverExpires $true -AccountNeverExpires $true -FullName $u -ErrorAction Stop | Out-Null
+                New-LocalUser -Name $u -Password $sec -PasswordNeverExpires:$true -AccountNeverExpires:$true -FullName $u -ErrorAction Stop | Out-Null
               }
               $configured = $true
-            } catch {}
+            } catch {
+              $lastError = "LocalAccounts: $($_.Exception.Message)"
+            }
           }
           if (-not $configured) {
             try {
@@ -173,20 +176,28 @@
                 $userObj.SetInfo()
               } catch {}
               $configured = $true
-            } catch {}
+            } catch {
+              $lastError = "ADSI: $($_.Exception.Message)"
+            }
           }
           if (-not $configured) {
-            net user $u $p /add /expires:never 2>&1 | Out-Null
+            $addOut = (cmd.exe /c "echo Y | net user $u $p /add /expires:never" 2>&1 | Out-String)
             if ($LASTEXITCODE -ne 0) {
-              net user $u $p /expires:never 2>&1 | Out-Null
+              $expOut = (cmd.exe /c "echo Y | net user $u $p /expires:never" 2>&1 | Out-String)
+              if ($LASTEXITCODE -eq 0) {
+                $configured = $true
+              } else {
+                $lastError = "NetUser: $addOut; $expOut"
+              }
+            } else {
+              $configured = $true
             }
-            if ($LASTEXITCODE -eq 0) { $configured = $true }
           }
           if ($configured) {
             Write-Output 'WIN_USER_CONFIGURED'
             exit 0
           } else {
-            Write-Error "FAILED_TO_CONFIGURE_USER: $u"
+            Write-Error "FAILED_TO_CONFIGURE_USER: $u. Details: $lastError"
             exit 1
           }
       ansible.builtin.raw: >
@@ -239,8 +250,13 @@
               }
             }
           }
-          Write-Output 'WIN_ADMIN_CONFIGURED'
-          exit 0
+          if ($added) {
+            Write-Output 'WIN_ADMIN_CONFIGURED'
+            exit 0
+          } else {
+            Write-Error "FAILED_TO_ADD_ADMIN: $u"
+            exit 1
+          }
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ win_group_script | b64encode(encoding='utf-16-le') }}
       loop: "{{ effective_users }}"
