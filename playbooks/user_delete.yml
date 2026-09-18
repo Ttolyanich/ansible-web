@@ -105,27 +105,7 @@
     - name: "[Windows / Fail-Close Safety Policy] Guard against domain controller modification"
       when: os_type | default('linux') == 'windows'
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        try {
-          $pt = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).ProductType
-        } catch {
-          try {
-            $pt = (Get-WmiObject Win32_OperatingSystem -ErrorAction Stop).ProductType
-          } catch {
-            Write-Error 'FAILED_DC_VERIFICATION'
-            exit 22
-          }
-        }
-        if ($pt -eq 2) {
-          Write-Error 'TARGET_IS_DOMAIN_CONTROLLER: User operations are strictly forbidden on Active Directory Domain Controllers!'
-          exit 20
-        }
-        if ($pt -ne 1 -and $pt -ne 3) {
-          Write-Error 'UNKNOWN_OS_PRODUCT_TYPE: Fail-close protection triggered.'
-          exit 21
-        }
-        Write-Output 'DC_CHECK_PASSED'
-        "
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if ((Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).ProductType -eq 2 -or (Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue).ProductType -eq 2) { Write-Error 'TARGET_IS_DOMAIN_CONTROLLER: User operations are strictly forbidden on Active Directory Domain Controllers!'; exit 20 } elseif ((Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue).ProductType -in @(1, 3) -or (Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue).ProductType -in @(1, 3)) { Write-Output 'DC_CHECK_PASSED' } else { Write-Error 'UNKNOWN_OS_PRODUCT_TYPE: Fail-close protection triggered.'; exit 21 }"
       register: win_dc_guard
       failed_when: win_dc_guard.rc != 0 or 'DC_CHECK_PASSED' not in win_dc_guard.stdout
       changed_when: false
@@ -136,31 +116,33 @@
         - os_type | default('linux') == 'windows'
         - not is_permanent_delete
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        $user = '{{ item.username }}';
-        $found = $false;
-        try {
-          if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) { $found = $true }
-        } catch {
-          $netOut = net user $user 2>&1
-          if ($LASTEXITCODE -eq 0) { $found = $true }
-        }
-        if (-not $found) {
-          Write-Output 'WIN_USER_NOT_FOUND'
-          exit 0
-        }
-        try {
-          Disable-LocalUser -Name $user -ErrorAction Stop
-        } catch {
-          net user $user /active:no 2>&1 | Out-Null
-        }
-        $adminGroups = @('Administrators', 'Администраторы', 'Remote Desktop Users', 'Пользователи удаленного рабочего стола');
-        foreach ($grp in $adminGroups) {
-          try { Remove-LocalGroupMember -Group $grp -Member $user -ErrorAction SilentlyContinue } catch {}
-          try { net localgroup $grp $user /delete 2>&1 | Out-Null } catch {}
-        }
-        Write-Output 'WIN_DISABLED_AND_STRIPPED'
-        "
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{
+          (
+            "$user = \"" ~ item.username ~ "\";\n" ~
+            "$found = $false;\n" ~
+            "try {\n" ~
+            "  if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) { $found = $true }\n" ~
+            "} catch {\n" ~
+            "  $netOut = net user $user 2>&1\n" ~
+            "  if ($LASTEXITCODE -eq 0) { $found = $true }\n" ~
+            "}\n" ~
+            "if (-not $found) {\n" ~
+            "  Write-Output 'WIN_USER_NOT_FOUND'\n" ~
+            "  exit 0\n" ~
+            "}\n" ~
+            "try {\n" ~
+            "  Disable-LocalUser -Name $user -ErrorAction Stop\n" ~
+            "} catch {\n" ~
+            "  net user $user /active:no 2>&1 | Out-Null\n" ~
+            "}\n" ~
+            "$adminGroups = @(\"Administrators\", \"Администраторы\", \"Remote Desktop Users\", \"Пользователи удаленного рабочего стола\");\n" ~
+            "foreach ($grp in $adminGroups) {\n" ~
+            "  try { Remove-LocalGroupMember -Group $grp -Member $user -ErrorAction SilentlyContinue } catch {}\n" ~
+            "  try { net localgroup $grp $user /delete 2>&1 | Out-Null } catch {}\n" ~
+            "}\n" ~
+            "Write-Output 'WIN_DISABLED_AND_STRIPPED'\n"
+          ) | b64encode
+        }}')) | iex"
       loop: "{{ effective_users }}"
       register: win_revoke_res
       changed_when: "'WIN_DISABLED_AND_STRIPPED' in win_revoke_res.stdout"
@@ -172,27 +154,29 @@
         - os_type | default('linux') == 'windows'
         - is_permanent_delete
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        $user = '{{ item.username }}';
-        try {
-          if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
-            Remove-LocalUser -Name $user -ErrorAction Stop
-            Write-Output 'WIN_USER_REMOVED'
-            exit 0
-          }
-        } catch {}
-        net user $user /delete
-        if ($LASTEXITCODE -eq 0) {
-          Write-Output 'WIN_USER_REMOVED'
-        } else {
-          $err = net user $user 2>&1
-          if ($err -match 'The user name could not be found' -or $err -match 'Не удалось найти') {
-            Write-Output 'WIN_USER_NOT_FOUND'
-          } else {
-            exit $LASTEXITCODE
-          }
-        }
-        "
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{
+          (
+            "$user = \"" ~ item.username ~ "\";\n" ~
+            "try {\n" ~
+            "  if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {\n" ~
+            "    Remove-LocalUser -Name $user -ErrorAction Stop\n" ~
+            "    Write-Output 'WIN_USER_REMOVED'\n" ~
+            "    exit 0\n" ~
+            "  }\n" ~
+            "} catch {}\n" ~
+            "net user $user /delete\n" ~
+            "if ($LASTEXITCODE -eq 0) {\n" ~
+            "  Write-Output 'WIN_USER_REMOVED'\n" ~
+            "} else {\n" ~
+            "  $err = net user $user 2>&1\n" ~
+            "  if ($err -match 'The user name could not be found' -or $err -match 'Не удалось найти') {\n" ~
+            "    Write-Output 'WIN_USER_NOT_FOUND'\n" ~
+            "  } else {\n" ~
+            "    exit $LASTEXITCODE\n" ~
+            "  }\n" ~
+            "}\n"
+          ) | b64encode
+        }}')) | iex"
       loop: "{{ effective_users }}"
       register: win_del_res
       changed_when: "'WIN_USER_REMOVED' in win_del_res.stdout"
