@@ -1120,11 +1120,14 @@ def run_user_ops():
         task_type = "user_create"
     else:
         playbook_name = "user_delete.yml"
+        permanent_delete = request.form.get("permanent_delete") == "1"
         extra_vars = {
             "target_users": target_users,
-            "target_username": target_users[0]["username"]
+            "target_username": target_users[0]["username"],
+            "permanent_delete": permanent_delete
         }
-        summary = f"Отзыв доступа / удаление [{usernames_preview}] ({len(target_users)} чел.) с {len(host_ids)} серверов{dc_note}"
+        action_verb = "Полное безвозвратное удаление" if permanent_delete else "Отключение учетных записей и отзыв прав"
+        summary = f"{action_verb} для [{usernames_preview}] ({len(target_users)} чел.) на {len(host_ids)} серверах{dc_note}"
         task_type = "user_delete"
 
     cred_profile_id = request.form.get("credential_profile_id")

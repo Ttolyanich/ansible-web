@@ -1,5 +1,5 @@
 ---
-- name: Remove Administrator Account on Linux & Windows
+- name: Revoke Access or Remove Accounts on Linux & Windows
   hosts: all
   gather_facts: false
 
@@ -11,12 +11,13 @@
             target_users if (target_users is defined and target_users is iterable and target_users | length > 0)
             else [{'username': target_username}]
           }}
+        is_permanent_delete: "{{ permanent_delete | default(false) | bool }}"
 
     - name: "[Safety Policy] Guard against deleting protected system accounts"
       ansible.builtin.assert:
         that:
           - item.username | lower not in ['ansible', 'root', 'admin', 'administrator', 'system']
-        fail_msg: "CRITICAL: Deletion of protected system user '{{ item.username }}' is strictly forbidden by safety policy!"
+        fail_msg: "CRITICAL: Operation on protected system user '{{ item.username }}' is strictly forbidden by safety policy!"
       loop: "{{ effective_users }}"
 
     # -------------------------------------------------------------
@@ -24,31 +25,95 @@
     # -------------------------------------------------------------
     - name: "[Linux] Kill all running processes of users"
       when: os_type | default('linux') == 'linux'
-      ansible.builtin.raw: "pkill -9 -u {{ item.username }} || true"
+      ansible.builtin.raw: "pkill -9 -u {{ item.username }} 2>/dev/null || true"
       loop: "{{ effective_users }}"
       changed_when: false
       failed_when: false
 
-    - name: "[Linux] Remove sudoers drop-in files and delete users"
+    - name: "[Linux] Remove sudoers drop-in files"
       when: os_type | default('linux') == 'linux'
       ansible.builtin.raw: >
+        sh -c 'rm -f "/etc/sudoers.d/{{ item.username }}" "/etc/sudoers.d/{{ item.username | replace(".", "_") }}" 2>/dev/null || true'
+      loop: "{{ effective_users }}"
+      changed_when: false
+      failed_when: false
+
+    # Safe Revoke Mode (Disable & strip groups)
+    - name: "[Linux / Safe Revoke] Lock account, expire, disable shell and strip groups"
+      when:
+        - os_type | default('linux') == 'linux'
+        - not is_permanent_delete
+      ansible.builtin.raw: >
         sh -c '
-        rm -f "/etc/sudoers.d/{{ item.username }}" "/etc/sudoers.d/{{ item.username | replace('.', '_') }}" 2>/dev/null || true;
-        userdel -r "{{ item.username }}" 2>/dev/null || deluser --remove-home "{{ item.username }}" 2>/dev/null || userdel "{{ item.username }}" 2>/dev/null || true;
+        usermod -L -e 1 "{{ item.username }}" 2>/dev/null || passwd -l "{{ item.username }}" 2>/dev/null || true;
+        usermod -s /sbin/nologin "{{ item.username }}" 2>/dev/null || usermod -s /usr/sbin/nologin "{{ item.username }}" 2>/dev/null || true;
+        usermod -G "" "{{ item.username }}" 2>/dev/null || true;
+        gpasswd -d "{{ item.username }}" sudo 2>/dev/null || true;
+        gpasswd -d "{{ item.username }}" wheel 2>/dev/null || true;
+        gpasswd -d "{{ item.username }}" admin 2>/dev/null || true;
+        gpasswd -d "{{ item.username }}" docker 2>/dev/null || true;
+        if [ -f "/home/{{ item.username }}/.ssh/authorized_keys" ]; then
+          mv -f "/home/{{ item.username }}/.ssh/authorized_keys" "/home/{{ item.username }}/.ssh/authorized_keys.disabled" 2>/dev/null || true;
+        fi;
+        echo "DISABLED_AND_STRIPPED"
         '
       loop: "{{ effective_users }}"
-      register: linux_del_res
+      changed_when: false
+      failed_when: false
+
+    # Permanent Delete Mode (userdel -r)
+    - name: "[Linux / Permanent Delete] Purge user and home directory"
+      when:
+        - os_type | default('linux') == 'linux'
+        - is_permanent_delete
+      ansible.builtin.raw: >
+        sh -c '
+        userdel -r "{{ item.username }}" 2>/dev/null || deluser --remove-home "{{ item.username }}" 2>/dev/null || userdel "{{ item.username }}" 2>/dev/null || true;
+        rm -rf "/home/{{ item.username }}" 2>/dev/null || true;
+        echo "PERMANENTLY_DELETED"
+        '
+      loop: "{{ effective_users }}"
       changed_when: false
       failed_when: false
 
     # -------------------------------------------------------------
     # WINDOWS TARGETS (via OpenSSH)
     # -------------------------------------------------------------
-    - name: "[Windows] Delete local users"
-      when: os_type | default('linux') == 'windows'
+    # Safe Revoke Mode (Disable & strip groups)
+    - name: "[Windows / Safe Revoke] Disable local user and remove from privileged groups"
+      when:
+        - os_type | default('linux') == 'windows'
+        - not is_permanent_delete
       ansible.builtin.raw: >
-        net user {{ item.username }} /delete
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        $user = '{{ item.username }}';
+        try {
+          net user $user /active:no 2>&1 | Out-Null
+          Disable-LocalUser -Name $user -ErrorAction SilentlyContinue
+        } catch {}
+        $adminGroups = @('Administrators', 'Администраторы', 'Remote Desktop Users', 'Пользователи удаленного рабочего стола');
+        foreach ($grp in $adminGroups) {
+          try { net localgroup $grp $user /delete 2>&1 | Out-Null } catch {}
+          try { Remove-LocalGroupMember -Group $grp -Member $user -ErrorAction SilentlyContinue } catch {}
+        }
+        Write-Output 'WIN_DISABLED_AND_STRIPPED'
+        "
+      loop: "{{ effective_users }}"
+      changed_when: false
+      failed_when: false
+
+    # Permanent Delete Mode (net user /delete)
+    - name: "[Windows / Permanent Delete] Delete local user account"
+      when:
+        - os_type | default('linux') == 'windows'
+        - is_permanent_delete
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        $user = '{{ item.username }}';
+        net user $user /delete
+        "
       loop: "{{ effective_users }}"
       register: win_del_res
       changed_when: "'command completed successfully' in win_del_res.stdout | lower or win_del_res.rc == 0"
       failed_when: false
+

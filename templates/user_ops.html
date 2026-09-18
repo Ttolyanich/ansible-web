@@ -53,12 +53,65 @@
                         <div class="flex items-center gap-3">
                             <i class="fa-solid fa-user-minus text-2xl text-red-400"></i>
                             <div>
-                                <div class="font-bold text-white text-sm">Отозвать доступ (удалить учетку)</div>
-                                <div class="text-xs text-slate-400 mt-0.5">Завершение процессов и удаление учетной записи с серверов</div>
+                                <div class="font-bold text-white text-sm">Отозвать доступ (отключить / удалить)</div>
+                                <div class="text-xs text-slate-400 mt-0.5">Отключение входа, снятие групп sudo/RDP или полное удаление</div>
                             </div>
                         </div>
                     </div>
                 </label>
+            </div>
+
+            <!-- Delete Mode Sub-options (Safe Disable vs Permanent Delete) -->
+            <div id="delete-mode-wrapper" class="hidden mt-4 pt-4 border-t border-slate-800 space-y-3">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <i class="fa-solid fa-user-shield"></i> Режим отзыва доступа
+                    </span>
+                    <span class="text-[10px] text-slate-400">По умолчанию безопасный режим</span>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <label class="cursor-pointer">
+                        <input type="radio" name="permanent_delete" value="0" class="peer sr-only" checked onchange="togglePermanentDeleteMode()">
+                        <div class="p-3 rounded-lg border border-slate-700 bg-slate-950 peer-checked:border-amber-500 peer-checked:bg-amber-950/20 transition hover:border-slate-600 h-full">
+                            <div class="flex items-start gap-2.5">
+                                <i class="fa-solid fa-user-lock text-amber-400 text-lg mt-0.5 shrink-0"></i>
+                                <div>
+                                    <div class="text-xs font-bold text-white flex items-center gap-1.5">
+                                        <span>Отключить учетку и забрать права</span>
+                                        <span class="px-1.5 py-0.2 rounded text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 font-mono">Рекомендуется</span>
+                                    </div>
+                                    <div class="text-[11px] text-slate-400 mt-1 leading-snug">
+                                        Блокирует пароль, отключает SSH-ключи, ставит shell nologin, удаляет из групп sudo/wheel/Administrators/RDP. Все файлы и домашний каталог сохраняются.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </label>
+
+                    <label class="cursor-pointer">
+                        <input type="radio" name="permanent_delete" value="1" class="peer sr-only" onchange="togglePermanentDeleteMode()">
+                        <div class="p-3 rounded-lg border border-red-900/60 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/30 transition hover:border-red-800 h-full">
+                            <div class="flex items-start gap-2.5">
+                                <i class="fa-solid fa-trash-can text-red-400 text-lg mt-0.5 shrink-0"></i>
+                                <div>
+                                    <div class="text-xs font-bold text-red-300 flex items-center gap-1.5">
+                                        <span>Безвозвратное полное удаление (Purge)</span>
+                                        <span class="px-1.5 py-0.2 rounded text-[10px] bg-red-950 text-red-300 border border-red-800 font-mono">Опасно</span>
+                                    </div>
+                                    <div class="text-[11px] text-red-400/80 mt-1 leading-snug">
+                                        Полностью удаляет пользователя с серверов вместе с домашней директорией и файлами (<code class="text-red-300">userdel -r</code> / <code class="text-red-300">net user /delete</code>).
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </label>
+                </div>
+
+                <div id="permanent-delete-alert" class="hidden p-3 rounded-lg bg-red-950/40 border border-red-800 text-red-300 text-xs flex items-center gap-2">
+                    <i class="fa-solid fa-triangle-exclamation text-red-400 text-base shrink-0"></i>
+                    <span><b>Внимание:</b> Выбрано полное удаление! Пользователь и все его файлы будут безвозвратно удалены. Восстановление невозможно.</span>
+                </div>
             </div>
         </div>
 
@@ -441,11 +494,12 @@
         const submitBtn = document.getElementById('submit-btn');
         const submitText = document.getElementById('submit-btn-text');
         const protectNotice = document.getElementById('delete-protection-notice');
+        const deleteModeWrapper = document.getElementById('delete-mode-wrapper');
 
         if (op === 'delete') {
             createManualFields.classList.add('hidden');
-            submitBtn.className = "px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg shadow-lg shadow-red-950/50 transition flex items-center gap-2";
-            submitText.innerText = "Запустить отзыв доступа / удаление";
+            if (deleteModeWrapper) deleteModeWrapper.classList.remove('hidden');
+            togglePermanentDeleteMode();
 
             if (protectNotice) protectNotice.classList.remove('hidden');
 
@@ -461,7 +515,8 @@
             });
         } else {
             createManualFields.classList.remove('hidden');
-            submitBtn.className = "px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg shadow-lg shadow-purple-950/50 transition flex items-center gap-2";
+            if (deleteModeWrapper) deleteModeWrapper.classList.add('hidden');
+            submitBtn.className = "px-6 py-3 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg shadow-lg shadow-purple-950/50 transition flex items-center gap-2 cursor-pointer";
             submitText.innerText = "Запустить создание доступа";
 
             if (protectNotice) protectNotice.classList.add('hidden');
@@ -475,6 +530,24 @@
                     label.title = "";
                 }
             });
+        }
+    }
+
+    function togglePermanentDeleteMode() {
+        const permanentEl = document.querySelector('input[name="permanent_delete"]:checked');
+        const alertBox = document.getElementById('permanent-delete-alert');
+        const submitBtn = document.getElementById('submit-btn');
+        const submitText = document.getElementById('submit-btn-text');
+        const isPerm = permanentEl && permanentEl.value === '1';
+
+        if (isPerm) {
+            if (alertBox) alertBox.classList.remove('hidden');
+            if (submitBtn) submitBtn.className = "px-6 py-3 bg-red-700 hover:bg-red-600 text-white font-bold rounded-lg shadow-lg shadow-red-950/50 transition flex items-center gap-2 cursor-pointer";
+            if (submitText) submitText.innerText = "Запустить полное удаление (Purge)";
+        } else {
+            if (alertBox) alertBox.classList.add('hidden');
+            if (submitBtn) submitBtn.className = "px-6 py-3 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg shadow-lg shadow-amber-950/50 transition flex items-center gap-2 cursor-pointer";
+            if (submitText) submitText.innerText = "Отключить учетку и забрать права";
         }
     }
 
@@ -578,7 +651,13 @@
 
                 const names = checkedBoxes.map(cb => cb.dataset.username || cb.dataset.name).slice(0, 5).join(', ');
                 const extra = checkedBoxes.length > 5 ? ` и еще ${checkedBoxes.length - 5}` : '';
-                return confirm(`ВНИМАНИЕ! Вы собираетесь ОТОЗВАТЬ ДОСТУП И УДАЛИТЬ (${checkedBoxes.length} чел.):\n[${names}${extra}]\nсо всех выбранных целевых серверов.\n\nПродолжить?`);
+                const isPermanent = document.querySelector('input[name="permanent_delete"]:checked')?.value === '1';
+
+                if (isPermanent) {
+                    return confirm(`⚠️ ВНИМАНИЕ! ВЫБРАНО ПОЛНОЕ БЕЗВОЗВРАТНОЕ УДАЛЕНИЕ!\n\nУчетные записи (${checkedBoxes.length} чел.):\n[${names}${extra}]\nИ ВСЕ ИХ ФАЙЛЫ будут безвозвратно удалены со всех целевых серверов.\n\nВы уверены, что хотите выполнить ПОЛНОЕ УДАЛЕНИЕ?`);
+                } else {
+                    return confirm(`Отключить учетные записи и отозвать группы/права для (${checkedBoxes.length} чел.):\n[${names}${extra}]\nна выбранных целевых серверах?\n\n(Файлы и профили пользователей сохраняются)`);
+                }
             } else {
                 const names = checkedBoxes.map(cb => cb.dataset.username || cb.dataset.name).slice(0, 5).join(', ');
                 const extra = checkedBoxes.length > 5 ? ` и еще ${checkedBoxes.length - 5}` : '';
@@ -597,7 +676,12 @@
                     alert(`КРИТИЧЕСКАЯ ЗАЩИТА: Пользователь "${username}" является защищенной системной учетной записью и НЕ МОЖЕТ быть удален с серверов!`);
                     return false;
                 }
-                return confirm(`ВНИМАНИЕ! Вы собираетесь УДАЛИТЬ пользователя "${username}" с выбранных серверов.\nВсе процессы пользователя будут принудительно завершены.\n\nПродолжить?`);
+                const isPermanent = document.querySelector('input[name="permanent_delete"]:checked')?.value === '1';
+                if (isPermanent) {
+                    return confirm(`⚠️ ВНИМАНИЕ! ВЫБРАНО ПОЛНОЕ БЕЗВОЗВРАТНОЕ УДАЛЕНИЕ!\n\nПользователь "${username}" и ВСЕ ЕГО ФАЙЛЫ будут стерты с выбранных серверов без возможности восстановления.\n\nПродолжить полное удаление?`);
+                } else {
+                    return confirm(`Отключить пользователя "${username}" и отозвать все привилегированные группы на серверах?\n\n(Файлы пользователя сохраняются)`);
+                }
             }
             return confirm(`Запустить создание пользователя "${username}" на целевых серверах?`);
         }
