@@ -146,7 +146,7 @@
           Write-Output 'WIN_DISABLED_AND_STRIPPED'
           exit 0
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ win_revoke_script | b64encode }}')) | iex"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ win_revoke_script | b64encode(encoding='utf-16-le') }}
       loop: "{{ effective_users }}"
       register: win_revoke_res
       changed_when: "'WIN_DISABLED_AND_STRIPPED' in win_revoke_res.stdout"
@@ -182,7 +182,7 @@
             exit $LASTEXITCODE
           }
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ win_delete_script | b64encode }}')) | iex"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ win_delete_script | b64encode(encoding='utf-16-le') }}
       loop: "{{ effective_users }}"
       register: win_del_res
       changed_when: "'WIN_USER_REMOVED' in win_del_res.stdout"

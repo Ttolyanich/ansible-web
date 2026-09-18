@@ -190,7 +190,7 @@
             exit 1
           }
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ win_user_script | b64encode }}')) | iex"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ win_user_script | b64encode(encoding='utf-16-le') }}
       loop: "{{ effective_users }}"
       register: win_user_res
       changed_when: "'WIN_USER_CONFIGURED' in win_user_res.stdout"
@@ -242,7 +242,7 @@
           Write-Output 'WIN_ADMIN_CONFIGURED'
           exit 0
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ win_group_script | b64encode }}')) | iex"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ win_group_script | b64encode(encoding='utf-16-le') }}
       loop: "{{ effective_users }}"
       register: win_group_res
       changed_when: "'WIN_ADMIN_CONFIGURED' in win_group_res.stdout"
