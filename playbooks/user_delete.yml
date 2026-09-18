@@ -115,34 +115,38 @@
       when:
         - os_type | default('linux') == 'windows'
         - not is_permanent_delete
+      vars:
+        win_revoke_script: |
+          $user = '{{ item.username }}'
+          $found = $false
+          if (Get-Command -Name 'Get-LocalUser' -ErrorAction SilentlyContinue) {
+            try {
+              if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) { $found = $true }
+            } catch {}
+          }
+          if (-not $found) {
+            net user $user 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { $found = $true }
+          }
+          if (-not $found) {
+            Write-Output 'WIN_USER_NOT_FOUND'
+            exit 0
+          }
+          if (Get-Command -Name 'Disable-LocalUser' -ErrorAction SilentlyContinue) {
+            try { Disable-LocalUser -Name $user -ErrorAction SilentlyContinue } catch {}
+          }
+          net user $user /active:no 2>&1 | Out-Null
+          $adminGroups = @('Administrators', 'Администраторы', 'Remote Desktop Users', 'Пользователи удаленного рабочего стола')
+          foreach ($grp in $adminGroups) {
+            if (Get-Command -Name 'Remove-LocalGroupMember' -ErrorAction SilentlyContinue) {
+              try { Remove-LocalGroupMember -Group $grp -Member $user -ErrorAction SilentlyContinue } catch {}
+            }
+            net localgroup $grp $user /delete 2>&1 | Out-Null
+          }
+          Write-Output 'WIN_DISABLED_AND_STRIPPED'
+          exit 0
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{
-          (
-            "$user = \"" ~ item.username ~ "\";\n" ~
-            "$found = $false;\n" ~
-            "try {\n" ~
-            "  if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) { $found = $true }\n" ~
-            "} catch {\n" ~
-            "  $netOut = net user $user 2>&1\n" ~
-            "  if ($LASTEXITCODE -eq 0) { $found = $true }\n" ~
-            "}\n" ~
-            "if (-not $found) {\n" ~
-            "  Write-Output 'WIN_USER_NOT_FOUND'\n" ~
-            "  exit 0\n" ~
-            "}\n" ~
-            "try {\n" ~
-            "  Disable-LocalUser -Name $user -ErrorAction Stop\n" ~
-            "} catch {\n" ~
-            "  net user $user /active:no 2>&1 | Out-Null\n" ~
-            "}\n" ~
-            "$adminGroups = @(\"Administrators\", \"Администраторы\", \"Remote Desktop Users\", \"Пользователи удаленного рабочего стола\");\n" ~
-            "foreach ($grp in $adminGroups) {\n" ~
-            "  try { Remove-LocalGroupMember -Group $grp -Member $user -ErrorAction SilentlyContinue } catch {}\n" ~
-            "  try { net localgroup $grp $user /delete 2>&1 | Out-Null } catch {}\n" ~
-            "}\n" ~
-            "Write-Output 'WIN_DISABLED_AND_STRIPPED'\n"
-          ) | b64encode
-        }}')) | iex"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ win_revoke_script | b64encode }}')) | iex"
       loop: "{{ effective_users }}"
       register: win_revoke_res
       changed_when: "'WIN_DISABLED_AND_STRIPPED' in win_revoke_res.stdout"
@@ -153,30 +157,32 @@
       when:
         - os_type | default('linux') == 'windows'
         - is_permanent_delete
+      vars:
+        win_delete_script: |
+          $user = '{{ item.username }}'
+          if (Get-Command -Name 'Remove-LocalUser' -ErrorAction SilentlyContinue) {
+            try {
+              if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
+                Remove-LocalUser -Name $user -ErrorAction Stop
+                Write-Output 'WIN_USER_REMOVED'
+                exit 0
+              }
+            } catch {}
+          }
+          net user $user /delete 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output 'WIN_USER_REMOVED'
+            exit 0
+          }
+          $err = net user $user 2>&1
+          if ($err -match 'The user name could not be found' -or $err -match 'Не удалось найти') {
+            Write-Output 'WIN_USER_NOT_FOUND'
+            exit 0
+          } else {
+            exit $LASTEXITCODE
+          }
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{
-          (
-            "$user = \"" ~ item.username ~ "\";\n" ~
-            "try {\n" ~
-            "  if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {\n" ~
-            "    Remove-LocalUser -Name $user -ErrorAction Stop\n" ~
-            "    Write-Output 'WIN_USER_REMOVED'\n" ~
-            "    exit 0\n" ~
-            "  }\n" ~
-            "} catch {}\n" ~
-            "net user $user /delete\n" ~
-            "if ($LASTEXITCODE -eq 0) {\n" ~
-            "  Write-Output 'WIN_USER_REMOVED'\n" ~
-            "} else {\n" ~
-            "  $err = net user $user 2>&1\n" ~
-            "  if ($err -match 'The user name could not be found' -or $err -match 'Не удалось найти') {\n" ~
-            "    Write-Output 'WIN_USER_NOT_FOUND'\n" ~
-            "  } else {\n" ~
-            "    exit $LASTEXITCODE\n" ~
-            "  }\n" ~
-            "}\n"
-          ) | b64encode
-        }}')) | iex"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ win_delete_script | b64encode }}')) | iex"
       loop: "{{ effective_users }}"
       register: win_del_res
       changed_when: "'WIN_USER_REMOVED' in win_del_res.stdout"

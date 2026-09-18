@@ -141,57 +141,56 @@
         - os_type | default('linux') == 'windows'
         - item.password is defined
         - item.password | length > 0
+      vars:
+        win_user_script: |
+          $u = '{{ item.username }}'
+          $p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ item.password | b64encode }}'))
+          $configured = $false
+          if (Get-Command -Name 'Get-LocalUser' -ErrorAction SilentlyContinue) {
+            try {
+              $sec = ConvertTo-SecureString $p -AsPlainText -Force
+              $existing = Get-LocalUser -Name $u -ErrorAction SilentlyContinue
+              if ($existing) {
+                Set-LocalUser -Name $u -Password $sec -PasswordNeverExpires $true -AccountNeverExpires $true -ErrorAction Stop
+              } else {
+                New-LocalUser -Name $u -Password $sec -PasswordNeverExpires $true -AccountNeverExpires $true -FullName $u -ErrorAction Stop | Out-Null
+              }
+              $configured = $true
+            } catch {}
+          }
+          if (-not $configured) {
+            try {
+              $adsi = [ADSI]"WinNT://$env:COMPUTERNAME"
+              $userObj = $null
+              try { $userObj = $adsi.Children.Find($u, 'user') } catch {
+                $userObj = $adsi.Create('user', $u)
+                $userObj.SetInfo()
+              }
+              $userObj.SetPassword($p)
+              try {
+                $flags = $userObj.Get('UserFlags')
+                $userObj.Put('UserFlags', ($flags -bor 0x10000))
+                $userObj.SetInfo()
+              } catch {}
+              $configured = $true
+            } catch {}
+          }
+          if (-not $configured) {
+            net user $u $p /add /expires:never 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              net user $u $p /expires:never 2>&1 | Out-Null
+            }
+            if ($LASTEXITCODE -eq 0) { $configured = $true }
+          }
+          if ($configured) {
+            Write-Output 'WIN_USER_CONFIGURED'
+            exit 0
+          } else {
+            Write-Error "FAILED_TO_CONFIGURE_USER: $u"
+            exit 1
+          }
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{
-          (
-            "$u = \"" ~ item.username ~ "\";\n" ~
-            "$p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String(\"" ~ (item.password | b64encode) ~ "\"));\n" ~
-            "$configured = $false;\n" ~
-            "if (Get-Command -Name 'Get-LocalUser' -ErrorAction SilentlyContinue) {\n" ~
-            "  try {\n" ~
-            "    $sec = ConvertTo-SecureString $p -AsPlainText -Force\n" ~
-            "    $existing = Get-LocalUser -Name $u -ErrorAction SilentlyContinue\n" ~
-            "    if ($existing) {\n" ~
-            "      Set-LocalUser -Name $u -Password $sec -PasswordNeverExpires $true -AccountNeverExpires $true -ErrorAction Stop\n" ~
-            "    } else {\n" ~
-            "      New-LocalUser -Name $u -Password $sec -PasswordNeverExpires $true -AccountNeverExpires $true -FullName $u -ErrorAction Stop | Out-Null\n" ~
-            "    }\n" ~
-            "    $configured = $true\n" ~
-            "  } catch {}\n" ~
-            "}\n" ~
-            "if (-not $configured) {\n" ~
-            "  try {\n" ~
-            "    $adsi = [ADSI]\"WinNT://$env:COMPUTERNAME\"\n" ~
-            "    $userObj = $null\n" ~
-            "    try { $userObj = $adsi.Children.Find($u, 'user') } catch {\n" ~
-            "      $userObj = $adsi.Create('user', $u)\n" ~
-            "      $userObj.SetInfo()\n" ~
-            "    }\n" ~
-            "    $userObj.SetPassword($p)\n" ~
-            "    try {\n" ~
-            "      $flags = $userObj.Get('UserFlags')\n" ~
-            "      $userObj.Put('UserFlags', ($flags -bor 0x10000))\n" ~
-            "      $userObj.SetInfo()\n" ~
-            "    } catch {}\n" ~
-            "    $configured = $true\n" ~
-            "  } catch {}\n" ~
-            "}\n" ~
-            "if (-not $configured) {\n" ~
-            "  net user $u $p /add /expires:never 2>&1 | Out-Null\n" ~
-            "  if ($LASTEXITCODE -ne 0) {\n" ~
-            "    net user $u $p /expires:never 2>&1 | Out-Null\n" ~
-            "  }\n" ~
-            "  if ($LASTEXITCODE -eq 0) { $configured = $true }\n" ~
-            "}\n" ~
-            "if ($configured) {\n" ~
-            "  Write-Output 'WIN_USER_CONFIGURED'\n" ~
-            "  exit 0\n" ~
-            "} else {\n" ~
-            "  Write-Error \"FAILED_TO_CONFIGURE_USER: $u\"\n" ~
-            "  exit 1\n" ~
-            "}\n"
-          ) | b64encode
-        }}')) | iex"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ win_user_script | b64encode }}')) | iex"
       loop: "{{ effective_users }}"
       register: win_user_res
       changed_when: "'WIN_USER_CONFIGURED' in win_user_res.stdout"
@@ -201,50 +200,49 @@
       when: 
         - os_type | default('linux') == 'windows'
         - item.sudo | default(true) | bool
+      vars:
+        win_group_script: |
+          $u = '{{ item.username }}'
+          $adminGroups = @('Administrators', 'Администраторы')
+          $added = $false
+          if (Get-Command -Name 'Add-LocalGroupMember' -ErrorAction SilentlyContinue) {
+            foreach ($grp in $adminGroups) {
+              try {
+                Add-LocalGroupMember -Group $grp -Member $u -ErrorAction Stop
+                $added = $true
+                break
+              } catch {
+                if ($_.Exception.Message -match 'already' -or $_.Exception.Message -match 'уже') {
+                  $added = $true
+                  break
+                }
+              }
+            }
+          }
+          if (-not $added) {
+            foreach ($grp in $adminGroups) {
+              try {
+                $grpObj = [ADSI]"WinNT://$env:COMPUTERNAME/$grp,group"
+                $userObj = [ADSI]"WinNT://$env:COMPUTERNAME/$u,user"
+                $grpObj.Add($userObj.Path)
+                $added = $true
+                break
+              } catch {}
+            }
+          }
+          if (-not $added) {
+            foreach ($grp in $adminGroups) {
+              net localgroup $grp $u /add 2>&1 | Out-Null
+              if ($LASTEXITCODE -eq 0) {
+                $added = $true
+                break
+              }
+            }
+          }
+          Write-Output 'WIN_ADMIN_CONFIGURED'
+          exit 0
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{
-          (
-            "$u = \"" ~ item.username ~ "\";\n" ~
-            "$adminGroups = @(\"Administrators\", \"Администраторы\");\n" ~
-            "$added = $false;\n" ~
-            "if (Get-Command -Name 'Add-LocalGroupMember' -ErrorAction SilentlyContinue) {\n" ~
-            "  foreach ($grp in $adminGroups) {\n" ~
-            "    try {\n" ~
-            "      Add-LocalGroupMember -Group $grp -Member $u -ErrorAction Stop\n" ~
-            "      $added = $true\n" ~
-            "      break\n" ~
-            "    } catch {\n" ~
-            "      if ($_.Exception.Message -match 'already' -or $_.Exception.Message -match 'уже') {\n" ~
-            "        $added = $true\n" ~
-            "        break\n" ~
-            "      }\n" ~
-            "    }\n" ~
-            "  }\n" ~
-            "}\n" ~
-            "if (-not $added) {\n" ~
-            "  foreach ($grp in $adminGroups) {\n" ~
-            "    try {\n" ~
-            "      $grpObj = [ADSI]\"WinNT://$env:COMPUTERNAME/$grp,group\"\n" ~
-            "      $userObj = [ADSI]\"WinNT://$env:COMPUTERNAME/$u,user\"\n" ~
-            "      $grpObj.Add($userObj.Path)\n" ~
-            "      $added = $true\n" ~
-            "      break\n" ~
-            "    } catch {}\n" ~
-            "  }\n" ~
-            "}\n" ~
-            "if (-not $added) {\n" ~
-            "  foreach ($grp in $adminGroups) {\n" ~
-            "    net localgroup $grp $u /add 2>&1 | Out-Null\n" ~
-            "    if ($LASTEXITCODE -eq 0) {\n" ~
-            "      $added = $true\n" ~
-            "      break\n" ~
-            "    }\n" ~
-            "  }\n" ~
-            "}\n" ~
-            "Write-Output 'WIN_ADMIN_CONFIGURED'\n" ~
-            "exit 0\n"
-          ) | b64encode
-        }}')) | iex"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{{ win_group_script | b64encode }}')) | iex"
       loop: "{{ effective_users }}"
       register: win_group_res
       changed_when: "'WIN_ADMIN_CONFIGURED' in win_group_res.stdout"
