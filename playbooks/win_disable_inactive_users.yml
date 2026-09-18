@@ -12,18 +12,22 @@
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         try {
-          $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
-          if ($os.ProductType -eq 2) {
-            Write-Output 'DOMAIN_CONTROLLER_DETECTED'
-          } elseif ($os.ProductType -eq 1 -or $os.ProductType -eq 3) {
-            Write-Output 'MEMBER_SERVER_OR_WORKSTATION_VERIFIED'
-          } else {
-            Write-Error ('UNKNOWN_OS_PRODUCT_TYPE_' + $os.ProductType)
-            exit 21
-          }
+          $pt = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).ProductType
         } catch {
-          Write-Error ('FAILED_DC_QUERY: ' + $_.Exception.Message)
-          exit 22
+          try {
+            $pt = (Get-WmiObject Win32_OperatingSystem -ErrorAction Stop).ProductType
+          } catch {
+            Write-Error 'FAILED_DC_QUERY'
+            exit 22
+          }
+        }
+        if ($pt -eq 2) {
+          Write-Output 'DOMAIN_CONTROLLER_DETECTED'
+        } elseif ($pt -eq 1 -or $pt -eq 3) {
+          Write-Output 'MEMBER_SERVER_OR_WORKSTATION_VERIFIED'
+        } else {
+          Write-Error 'UNKNOWN_OS_PRODUCT_TYPE'
+          exit 21
         }
         "
       register: dc_check_res
@@ -96,8 +100,8 @@
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         $folder = 'C:\Windows\Scripts\inactive_users';
         $acl = Get-Acl -Path $folder;
-        $acl.SetAccessRuleProtection($true, $false);
-        $acl.Access | ForEach-Object { try { $acl.RemoveAccessRule($_) } catch {} };
+        $rules = @($acl.Access);
+        foreach ($r in $rules) { try { $acl.RemoveAccessRule($r) } catch {} };
         $ruleSys = New-Object System.Security.AccessControl.FileSystemAccessRule('NT AUTHORITY\SYSTEM', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow');
         $ruleAdm = New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Administrators', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow');
         $acl.SetAccessRule($ruleSys);

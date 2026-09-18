@@ -35,8 +35,12 @@
         $res.DirExists = Test-Path $dir;
         $exclPath = Join-Path $dir 'excluded_users.txt';
         if (Test-Path $exclPath) {
-          $lines = Get-Content $exclPath | Where-Object { $_.Trim() -ne '' -and $_.Trim() -notlike '#*' };
-          $res.ExclusionsCount = $lines.Count;
+          $allLines = Get-Content $exclPath;
+          $valid = 0;
+          foreach ($l in $allLines) {
+            if ($l.Trim() -ne '' -and -not $l.Trim().StartsWith('#')) { $valid++ }
+          };
+          $res.ExclusionsCount = $valid;
         }
 
         $scriptPath = Join-Path $dir 'disable_inactive_users_local.ps1';
