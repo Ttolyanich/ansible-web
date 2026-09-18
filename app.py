@@ -2249,6 +2249,7 @@ def bootstrap_database():
             admin = User(username="admin", role="admin")
             admin.set_password("admin")
             db.session.add(admin)
+            db.session.commit()
             print("[BOOTSTRAP] Created default admin user (admin / admin)")
 
         # 3. Ensure system CustomGroup 'Контроллеры домена' exists and auto-tag
