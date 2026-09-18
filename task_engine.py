@@ -8,6 +8,7 @@ import subprocess
 import logging
 import ctypes
 import time
+import signal
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional, Tuple
@@ -20,15 +21,25 @@ active_task_processes: Dict[int, subprocess.Popen] = {}
 
 
 def cancel_task(task_id: int) -> bool:
-    """Terminates running subprocess for a given task ID."""
+    """Terminates running subprocess and its process group for a given task ID."""
     proc = active_task_processes.get(task_id)
     if proc:
         try:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2)
-            except Exception:
-                proc.kill()
+            if os.name != "nt":
+                try:
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    time.sleep(0.3)
+                    if proc.poll() is None:
+                        os.killpg(pgid, signal.SIGKILL)
+                except Exception:
+                    proc.terminate()
+            else:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    proc.kill()
             return True
         except Exception as e:
             logger.warning(f"Error canceling task {task_id}: {e}")
@@ -824,6 +835,23 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
         ansible_cmd = shutil.which("ansible-playbook")
         playbook_path = os.path.join(os.path.dirname(__file__), "playbooks", playbook_name)
 
+        if not ansible_cmd:
+            err_msg = "CRITICAL: 'ansible-playbook' executable not found in system PATH. Cannot execute task."
+            logger.error(err_msg)
+            aggregated_logs.append(f"\n{err_msg}\n")
+            task.status = "failed"
+            task.log_output = "".join(aggregated_logs)
+            task.finished_at = datetime.utcnow()
+            try:
+                db.session.commit()
+            except Exception:
+                pass
+            return
+
+        task_log_dir = os.path.join(os.path.dirname(__file__), "instance", "tasks")
+        os.makedirs(task_log_dir, exist_ok=True)
+        task_log_file = os.path.join(task_log_dir, f"{task_id}.log")
+
         while pending_hosts and pass_num <= max_passes:
             current_batch = []
             current_creds_map = {}
@@ -847,6 +875,11 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                 pass_title = f"=== [ПРОХОД {pass_num} (АВТО-ПОДБОР)] Повторная попытка для {len(current_batch)} хостов с альтернативными профилями ==="
 
             aggregated_logs.append(f"\n{pass_title}\n")
+            try:
+                with open(task_log_file, "a", encoding="utf-8") as lf:
+                    lf.write(f"\n{pass_title}\n")
+            except Exception:
+                pass
 
             batch_temp_dir = tempfile.mkdtemp(prefix=f"ansible_pass_{pass_num}_")
             try:
@@ -856,93 +889,103 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                 with open(extra_vars_file, "w", encoding="utf-8") as evf:
                     json.dump(extra_vars, evf, ensure_ascii=False)
 
-                if ansible_cmd:
-                    cmd = [
-                        ansible_cmd,
-                        "-i", inventory_file,
-                        playbook_path,
-                        "-e", f"@{extra_vars_file}",
-                        "-f", str(forks),
-                        "-T", str(ssh_timeout)
-                    ]
-                    env = os.environ.copy()
-                    cfg_path = os.path.join(os.path.dirname(__file__), "ansible.cfg")
-                    if os.path.exists(cfg_path):
-                        env["ANSIBLE_CONFIG"] = cfg_path
-                    openssl_cfg = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
-                    if os.path.exists(openssl_cfg):
-                        env["OPENSSL_CONF"] = openssl_cfg
-                    env["PYTHONUNBUFFERED"] = "1"
-                    env["ANSIBLE_FORCE_COLOR"] = "0"
-                    env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
-                    env["ANSIBLE_RETRY_FILES_ENABLED"] = "False"
-                    env["ANSIBLE_STDOUT_CALLBACK"] = "default"
-                    env["ANSIBLE_SSH_RETRIES"] = "1"
-                    env["ANSIBLE_TIMEOUT"] = str(ssh_timeout)
-                    env["ANSIBLE_TASK_TIMEOUT"] = "30"
+                cmd = [
+                    ansible_cmd,
+                    "-i", inventory_file,
+                    playbook_path,
+                    "-e", f"@{extra_vars_file}",
+                    "-f", str(forks),
+                    "-T", str(ssh_timeout)
+                ]
+                env = os.environ.copy()
+                cfg_path = os.path.join(os.path.dirname(__file__), "ansible.cfg")
+                if os.path.exists(cfg_path):
+                    env["ANSIBLE_CONFIG"] = cfg_path
+                openssl_cfg = os.path.join(os.path.dirname(__file__), "openssl_legacy.cnf")
+                if os.path.exists(openssl_cfg):
+                    env["OPENSSL_CONF"] = openssl_cfg
+                env["PYTHONUNBUFFERED"] = "1"
+                env["ANSIBLE_FORCE_COLOR"] = "0"
+                env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
+                env["ANSIBLE_RETRY_FILES_ENABLED"] = "False"
+                env["ANSIBLE_STDOUT_CALLBACK"] = "default"
+                env["ANSIBLE_SSH_RETRIES"] = "1"
+                env["ANSIBLE_TIMEOUT"] = str(ssh_timeout)
+                env["ANSIBLE_TASK_TIMEOUT"] = "30"
 
-                    task.log_output = "".join(aggregated_logs)
-                    try:
-                        db.session.commit()
-                    except Exception:
-                        pass
+                task.log_output = "".join(aggregated_logs)
+                try:
+                    db.session.commit()
+                except Exception:
+                    pass
 
-                    proc = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        bufsize=1,
-                        env=env
-                    )
-                    active_task_processes[task_id] = proc
+                popen_kwargs = {
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.STDOUT,
+                    "text": True,
+                    "bufsize": 1,
+                    "env": env
+                }
+                if os.name != "nt":
+                    popen_kwargs["start_new_session"] = True
 
-                    pass_chunks = []
-                    last_flush = time.time()
+                proc = subprocess.Popen(cmd, **popen_kwargs)
+                active_task_processes[task_id] = proc
 
-                    try:
-                        while True:
-                            line = proc.stdout.readline()
-                            if not line and proc.poll() is not None:
-                                break
-                            if line:
-                                line = sanitize_log_text(line)
-                                pass_chunks.append(line)
+                pass_chunks = []
+                last_flush = time.time()
 
-                            now = time.time()
-                            if (now - last_flush) >= 0.8:
-                                # Periodic check for task cancellation and DB flush
-                                try:
-                                    db.session.refresh(task)
-                                    if task.status == "canceled":
+                try:
+                    while True:
+                        line = proc.stdout.readline()
+                        if not line and proc.poll() is not None:
+                            break
+                        if line:
+                            line = sanitize_log_text(line)
+                            pass_chunks.append(line)
+                            try:
+                                with open(task_log_file, "a", encoding="utf-8") as lf:
+                                    lf.write(line)
+                            except Exception:
+                                pass
+
+                        now = time.time()
+                        if (now - last_flush) >= 2.5:
+                            # Periodic check for task cancellation and DB flush
+                            try:
+                                db.session.refresh(task)
+                                if task.status == "canceled":
+                                    if os.name != "nt":
+                                        try:
+                                            pgid = os.getpgid(proc.pid)
+                                            os.killpg(pgid, signal.SIGTERM)
+                                            time.sleep(0.3)
+                                            if proc.poll() is None:
+                                                os.killpg(pgid, signal.SIGKILL)
+                                        except Exception:
+                                            proc.terminate()
+                                    else:
                                         proc.terminate()
-                                        break
+                                    break
+                            except Exception:
+                                pass
+
+                            if pass_chunks:
+                                task.log_output = "".join(aggregated_logs) + "".join(pass_chunks)
+                                try:
+                                    db.session.commit()
+                                    last_flush = now
                                 except Exception:
-                                    pass
+                                    db.session.rollback()
 
-                                if pass_chunks:
-                                    task.log_output = "".join(aggregated_logs) + "".join(pass_chunks)
-                                    try:
-                                        db.session.commit()
-                                        last_flush = now
-                                    except Exception:
-                                        db.session.rollback()
+                    proc.stdout.close()
+                    proc.wait(timeout=5)
+                except Exception as ex:
+                    logger.warning(f"Process stream exception: {ex}")
+                finally:
+                    active_task_processes.pop(task_id, None)
 
-                        proc.stdout.close()
-                        proc.wait(timeout=5)
-                    except Exception as ex:
-                        logger.warning(f"Process stream exception: {ex}")
-                    finally:
-                        active_task_processes.pop(task_id, None)
-
-                    pass_output = "".join(pass_chunks)
-                else:
-                    # Simulation mode fallback
-                    pass_output = f"[ANSIBLE-WEB SIMULATION - PASS {pass_num}]\nTarget hosts: {len(current_batch)}\n"
-                    pass_output += "PLAY RECAP *********************************************************************\n"
-                    for h in current_batch:
-                        pass_output += f"{h.name} : ok=1 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\n"
-
+                pass_output = "".join(pass_chunks)
                 aggregated_logs.append(pass_output)
                 task.log_output = "".join(aggregated_logs)
                 try:
@@ -1034,7 +1077,14 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
         task.log_output = "".join(aggregated_logs)
         task.finished_at = now
 
-        if failed_count == 0:
+        try:
+            db.session.refresh(task)
+        except Exception:
+            pass
+
+        if task.status == "canceled":
+            pass
+        elif failed_count == 0:
             task.status = "success"
         elif success_count == 0:
             task.status = "failed"
@@ -1083,22 +1133,25 @@ DEFAULT_INACTIVE_USERS_SCRIPT = r'''param(
     [int]$InactiveMonths = 2
 )
 
-# SAFETY GUARD: Check if this server is a Domain Controller
-$isDC = $false
+# SAFETY GUARD: Check if this server is a Domain Controller (Fail-Close)
 try {
-    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-    if (-not $os) { $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue }
-    if ($os.ProductType -eq 2) { $isDC = $true }
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
 } catch {
     try {
-        $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue
-        if ($os.ProductType -eq 2) { $isDC = $true }
-    } catch {}
+        $os = Get-WmiObject Win32_OperatingSystem -ErrorAction Stop
+    } catch {
+        Write-Error "FAIL-CLOSE: Unable to verify Operating System ProductType. Terminating execution for safety."
+        exit 20
+    }
 }
 
-if ($isDC) {
+if ($os.ProductType -eq 2) {
     Write-Output "ABORT: Target is an Active Directory Domain Controller (ProductType=2). Inactive local user disabler cannot run on Domain Controllers."
     exit 0
+}
+if ($os.ProductType -ne 1 -and $os.ProductType -ne 3) {
+    Write-Error "FAIL-CLOSE: Target ProductType ($($os.ProductType)) is neither Workstation (1) nor Server (3). Execution aborted."
+    exit 21
 }
 
 $scriptFolder = "C:\Windows\Scripts\inactive_users"
@@ -1108,13 +1161,16 @@ $excludeFilePath = Join-Path $scriptFolder "excluded_users.txt"
 $inactiveDate = (Get-Date).AddMonths(-$InactiveMonths)
 Write-Output "Cutoff date for inactive accounts: $inactiveDate"
 
-$excludedUsers = @()
-if (Test-Path $excludeFilePath) {
-    $excludedUsers = Get-Content -Path $excludeFilePath | Where-Object { $_.Trim() -ne '' -and $_.Trim() -notlike '#*' }
-    Write-Output "Loaded $($excludedUsers.Count) excluded accounts."
-} else {
-    Write-Output "Exclusions file $excludeFilePath not found - no accounts excluded."
+if (-not (Test-Path $excludeFilePath)) {
+    Write-Error "CRITICAL: Exclusions file $excludeFilePath not found! Aborting to prevent lockout of all accounts."
+    exit 22
 }
+$excludedUsers = @(Get-Content -Path $excludeFilePath | Where-Object { $_.Trim() -ne '' -and $_.Trim() -notlike '#*' })
+if ($excludedUsers.Count -eq 0) {
+    Write-Error "CRITICAL: Exclusions file $excludeFilePath contains no active entries! Aborting to prevent lockout of all accounts."
+    exit 23
+}
+Write-Output "Loaded $($excludedUsers.Count) excluded accounts."
 
 if (-not (Test-Path -Path $logFilePath)) {
     Out-File -FilePath $logFilePath -Encoding UTF8
@@ -1149,6 +1205,15 @@ foreach ($user in $localUsers) {
     $lastLogonDisplay = if ($null -eq $lastLogon) { "(never)" } else { $lastLogon }
     Write-Output "  Last logon: $lastLogonDisplay"
 
+    # Check for freshly created accounts that never logged in yet
+    if ($null -eq $lastLogon) {
+        $pwdLastSet = $user.PasswordLastSet
+        if ($pwdLastSet -and $pwdLastSet -gt $inactiveDate) {
+            Write-Output "  Fresh account (never logged on, but password set on $pwdLastSet within cutoff period). Skipping."
+            continue
+        }
+    }
+
     if ($null -eq $lastLogon -or $lastLogon -lt $inactiveDate) {
         try {
             $user | Disable-LocalUser -ErrorAction Stop
@@ -1170,6 +1235,24 @@ $summary = "Summary: disabled=$disabledCount, excluded=$skippedExcluded, errors=
 Write-Output $summary
 [System.IO.File]::AppendAllText($logFilePath, $summary + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
 '''
+
+
+def sanitize_extra_vars_for_storage(vars_data: Any) -> Any:
+    """Recursively scrub passwords, private keys, and tokens from dictionaries/lists for DB persistence."""
+    if isinstance(vars_data, dict):
+        sanitized = {}
+        for k, v in vars_data.items():
+            k_lower = str(k).lower()
+            if any(secret_term in k_lower for secret_term in ("password", "passwd", "secret", "token", "private_key", "key_passphrase")):
+                sanitized[k] = "******" if v else ""
+            elif k_lower in ("ssh_key", "target_ssh_key") and isinstance(v, str) and len(v) > 60:
+                sanitized[k] = v[:25] + "...[SSH_KEY_TRUNCATED]..." + v[-15:]
+            else:
+                sanitized[k] = sanitize_extra_vars_for_storage(v)
+        return sanitized
+    elif isinstance(vars_data, list):
+        return [sanitize_extra_vars_for_storage(item) for item in vars_data]
+    return vars_data
 
 
 def build_inactive_users_exclusions(custom_service_accounts: Optional[List[str]] = None) -> str:
@@ -1208,7 +1291,7 @@ def dispatch_task(app, task_type: str, playbook_name: str, host_ids: List[int], 
 
     meta_info = {
         "playbook_name": playbook_name,
-        "extra_vars": extra_vars,
+        "extra_vars": sanitize_extra_vars_for_storage(extra_vars),
         "note": filter_info,
         "excluded_hosts_count": len(host_ids) - len(final_host_ids) if exclude_host_ids else 0
     }

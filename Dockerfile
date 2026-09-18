@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Python requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir ansible-core>=2.15.0
+    && pip install --no-cache-dir "ansible-core>=2.15.0"
 
 # Install Ansible collections for Linux and Windows SSH
 RUN ansible-galaxy collection install ansible.posix community.general

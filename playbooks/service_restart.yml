@@ -15,11 +15,11 @@
     - name: Manage service state
       ansible.builtin.service:
         name: "{{ target_service }}"
-        state: "{{ service_state | default('restarted') }}"
+        state: "{{ service_state | default(target_action | default('restarted')) }}"
       register: service_manage_res
 
     - name: Verify service active state
-      ansible.builtin.raw: systemctl is-active {{ target_service }} || service {{ target_service }} status
+      ansible.builtin.raw: systemctl is-active {{ target_service | quote }} || service {{ target_service | quote }} status
       register: service_status_res
       changed_when: false
       failed_when: false

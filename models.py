@@ -34,9 +34,15 @@ class CryptoHelper:
                     key = new_key
             primary_key = key.encode() if isinstance(key, str) else key
             ciphers = [Fernet(primary_key)]
-            legacy_key = b"v1tX7e1eHnZtTqK_x6FvE9qL1pG2bA4sD6jK8mN0wQY="
-            if primary_key != legacy_key:
-                ciphers.append(Fernet(legacy_key))
+            legacy_keys_env = os.getenv("LEGACY_FERNET_KEYS", "").strip()
+            if legacy_keys_env:
+                for lk in legacy_keys_env.split(","):
+                    lk = lk.strip()
+                    if lk:
+                        try:
+                            ciphers.append(Fernet(lk.encode()))
+                        except Exception:
+                            pass
             cls._cipher = MultiFernet(ciphers)
         return cls._cipher
 

@@ -1,6 +1,8 @@
 import os
 import json
 import re
+import secrets
+import uuid
 from datetime import datetime, timedelta
 from functools import wraps
 import yaml
@@ -28,11 +30,67 @@ from task_engine import (
 enable_openssl_legacy_provider()
 
 
+# Strict POSIX username validation: starts with letter, 2-32 chars
+USERNAME_REGEX = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]{1,31}$")
+
+def is_valid_username(username: str) -> bool:
+    """Validate username according to strict security policy (no purely numeric or dangerous usernames)."""
+    return bool(username and USERNAME_REGEX.match(username))
+
+
+FORBIDDEN_EXTRA_VAR_PREFIXES = ("ansible_", "playbook_dir", "inventory_dir")
+FORBIDDEN_EXTRA_VAR_KEYS = {
+    "effective_users", "target_users", "excluded_users_content", 
+    "disable_script_content", "environment", "become_user"
+}
+
+def validate_safe_extra_vars(vars_dict: dict) -> tuple[bool, str]:
+    """Ensure extra_vars cannot manipulate internal Ansible variables or inject malicious parameters."""
+    if not isinstance(vars_dict, dict):
+        return False, "Дополнительные переменные должны быть словарем (YAML/JSON mapping)."
+    for k in vars_dict.keys():
+        k_str = str(k).strip()
+        if any(k_str.startswith(prefix) for prefix in FORBIDDEN_EXTRA_VAR_PREFIXES):
+            return False, f"Переменная '{k_str}' запрещена правилами безопасности (запрещены системные параметры ansible_*)."
+        if k_str in FORBIDDEN_EXTRA_VAR_KEYS:
+            return False, f"Переопределение системной переменной '{k_str}' через дополнительные переменные запрещено."
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", k_str):
+            return False, f"Недопустимое имя переменной '{k_str}'."
+    return True, ""
+
+
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "ansible-super-secret-key-default-change-me")
-db_url = os.getenv("DATABASE_URL")
 instance_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "instance"))
 os.makedirs(instance_dir, exist_ok=True)
+
+def get_or_create_secret_key(target_dir: str) -> str:
+    """Retrieve or generate cryptographically secure secret key without insecure hardcoded defaults."""
+    env_key = os.getenv("SECRET_KEY")
+    if env_key and env_key.strip() and env_key.strip() not in ("ansible-super-secret-key-default-change-me", "ansible-web-secret-key-prod-super-secure"):
+        return env_key.strip()
+    key_file = os.path.join(target_dir, "secret.key")
+    if os.path.exists(key_file):
+        try:
+            with open(key_file, "r", encoding="utf-8") as f:
+                saved = f.read().strip()
+                if saved:
+                    return saved
+        except Exception:
+            pass
+    generated_key = secrets.token_hex(32)
+    try:
+        with open(key_file, "w", encoding="utf-8") as f:
+            f.write(generated_key)
+        try:
+            os.chmod(key_file, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return generated_key
+
+app.config["SECRET_KEY"] = get_or_create_secret_key(instance_dir)
+db_url = os.getenv("DATABASE_URL")
 
 if not db_url:
     db_url = f"sqlite:///{os.path.join(instance_dir, 'ansible_web.db')}"
@@ -591,8 +649,8 @@ def create_staff():
         flash("ФИО и системный логин обязательны для заполнения.", "danger")
         return redirect(url_for("staff_view"))
 
-    if not re.match(r"^[a-zA-Z0-9_.-]{1,64}$", username):
-        flash("Логин содержит недопустимые символы. Разрешены только латинские буквы, цифры, точка, тире и подчеркивание (до 64 знаков).", "danger")
+    if not is_valid_username(username):
+        flash("Логин содержит недопустимые символы. Логин должен начинаться с буквы и содержать от 2 до 32 знаков (латиница, цифры, '.', '_', '-'). Числовые логины запрещены.", "danger")
         return redirect(url_for("staff_view"))
 
     existing = StaffMember.query.filter_by(username=username).first()
@@ -635,8 +693,8 @@ def edit_staff(staff_id):
         sudo_enabled = True
 
     if username and username != staff.username:
-        if not re.match(r"^[a-zA-Z0-9_.-]{1,64}$", username):
-            flash("Логин содержит недопустимые символы. Разрешены только латинские буквы, цифры, точка, тире и подчеркивание (до 64 знаков).", "danger")
+        if not is_valid_username(username):
+            flash("Логин содержит недопустимые символы. Логин должен начинаться с буквы и содержать от 2 до 32 знаков (латиница, цифры, '.', '_', '-'). Числовые логины запрещены.", "danger")
             return redirect(url_for("staff_view"))
         existing = StaffMember.query.filter_by(username=username).first()
         if existing:
@@ -797,7 +855,7 @@ def manage_service_accounts():
         log_entry = AuditLog(
             user_id=current_user.id,
             action="UPDATE_SERVICE_ACCOUNTS",
-            details=f"Обновлен список сервисных исключений: {len(account_names)} аккаунтов"
+            description=f"Обновлен список сервисных исключений: {len(account_names)} аккаунтов"
         )
         db.session.add(log_entry)
         db.session.commit()
@@ -1015,8 +1073,8 @@ def run_user_ops():
         return redirect(url_for("user_ops_view"))
 
     for u in target_users:
-        if not re.match(r"^[a-zA-Z0-9_.-]{1,64}$", u["username"]):
-            flash(f"Некорректное имя пользователя '{u['username']}'. Разрешены только латинские буквы, цифры, '.', '_', '-' (до 64 знаков).", "danger")
+        if not is_valid_username(u.get("username", "")):
+            flash(f"Некорректное имя пользователя '{u.get('username')}'. Логин должен начинаться с буквы и содержать от 2 до 32 знаков (латиница, цифры, '.', '_', '-'). Числовые логины запрещены.", "danger")
             return redirect(url_for("user_ops_view"))
 
     if operation == "delete":
@@ -1464,16 +1522,35 @@ def playbook_run_post(filename):
                 flash(f"Ошибка в формате дополнительных переменных: {e}", "danger")
                 return redirect(url_for("playbook_run", filename=clean_filename))
 
+    is_safe, error_msg = validate_safe_extra_vars(extra_vars)
+    if not is_safe:
+        flash(f"Ошибка безопасности в переменных: {error_msg}", "danger")
+        return redirect(url_for("playbook_run", filename=clean_filename))
+
     if clean_filename == "service_restart.yml":
         target_svc = str(extra_vars.get("target_service", "")).strip()
-        if target_svc and not re.match(r"^[a-zA-Z0-9_@.-]{1,64}$", target_svc):
+        if not target_svc or not re.match(r"^[a-zA-Z0-9_@.-]{1,64}$", target_svc):
             flash("Недопустимое имя сервиса. Разрешены только латинские буквы, цифры, '.', '_', '-', '@' (до 64 знаков).", "danger")
             return redirect(url_for("playbook_run", filename=clean_filename))
-        target_act = str(extra_vars.get("target_action", "restart")).strip().lower()
-        if target_act not in {"start", "stop", "restart", "reload", "status"}:
-            flash("Недопустимое действие для сервиса. Допустимы: start, stop, restart, reload, status.", "danger")
+        
+        target_act = str(extra_vars.get("target_action", extra_vars.get("service_state", "restart"))).strip().lower()
+        action_map = {
+            "start": "started",
+            "stop": "stopped",
+            "restart": "restarted",
+            "reload": "reloaded",
+            "started": "started",
+            "stopped": "stopped",
+            "restarted": "restarted",
+            "reloaded": "reloaded"
+        }
+        if target_act not in action_map:
+            flash("Недопустимое действие для сервиса. Допустимы: start, stop, restart, reload.", "danger")
             return redirect(url_for("playbook_run", filename=clean_filename))
+        
+        extra_vars["target_service"] = target_svc
         extra_vars["target_action"] = target_act
+        extra_vars["service_state"] = action_map[target_act]
 
     cred_profile_id = request.form.get("credential_profile_id")
     if cred_profile_id and cred_profile_id.isdigit():
@@ -2022,6 +2099,10 @@ def create_panel_user():
         flash("Имя пользователя и пароль обязательны.", "danger")
         return redirect(url_for("users_view"))
 
+    if not is_valid_username(username):
+        flash("Имя пользователя должно начинаться с буквы и содержать от 2 до 32 знаков (латиница, цифры, '.', '_', '-').", "danger")
+        return redirect(url_for("users_view"))
+
     if User.query.filter_by(username=username).first():
         flash(f"Пользователь с именем «{username}» уже существует.", "danger")
         return redirect(url_for("users_view"))
@@ -2068,13 +2149,35 @@ def delete_panel_user(user_id):
 @app.errorhandler(500)
 def handle_internal_server_error(e):
     import traceback
-    tb = traceback.format_exc()
+    error_id = uuid.uuid4().hex[:8].upper()
+    app.logger.error(f"[ERROR {error_id}] 500 Internal Server Error: {e}\n{traceback.format_exc()}")
     return f"""
-    <div style="background:#0f172a;color:#e2e8f0;padding:24px;font-family:monospace;border-radius:12px;margin:20px;border:1px solid #334155">
-        <h2 style="color:#ef4444;margin-top:0">Internal Server Error (500)</h2>
-        <p style="color:#94a3b8">При обработке запроса произошла ошибка:</p>
-        <pre style="background:#020617;color:#fca5a5;padding:16px;border-radius:8px;overflow-x:auto;border:1px solid #1e293b">{tb}</pre>
-    </div>
+    <!DOCTYPE html>
+    <html lang="ru" class="dark">
+    <head>
+        <meta charset="UTF-8">
+        <title>500 — Внутренняя ошибка сервера</title>
+        <link rel="stylesheet" href="/static/css/tailwind.min.css">
+        <style>body {{ background: #0f172a; color: #f8fafc; font-family: ui-sans-serif, system-ui, sans-serif; }}</style>
+    </head>
+    <body class="min-h-screen flex items-center justify-center p-6">
+        <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center shadow-2xl">
+            <div class="w-16 h-16 bg-red-500/10 text-red-400 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-red-500/20">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            </div>
+            <h1 class="text-2xl font-bold text-slate-100 mb-2">500 — Внутренняя ошибка</h1>
+            <p class="text-sm text-slate-400 mb-6">Произошла непредвиденная ошибка при обработке запроса. Детали зафиксированы в журнале сервера.</p>
+            <div class="bg-slate-950 border border-slate-800 rounded-xl p-3 mb-6">
+                <span class="text-xs text-slate-500 uppercase tracking-wider font-semibold">Код инцидента:</span>
+                <div class="font-mono text-sm text-red-400 font-bold mt-0.5">{error_id}</div>
+            </div>
+            <div class="flex gap-3 justify-center">
+                <a href="/" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-xl transition">На главную</a>
+                <button onclick="history.back()" class="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold rounded-xl transition">Назад</button>
+            </div>
+        </div>
+    </body>
+    </html>
     """, 500
 
 

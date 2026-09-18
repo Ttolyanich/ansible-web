@@ -23,12 +23,25 @@
     # -------------------------------------------------------------
     # LINUX TARGETS
     # -------------------------------------------------------------
-    - name: "[Linux] Kill all running processes of users"
+    - name: "[Linux / Safety Guard] Terminate user processes (UID >= 1000 only)"
       when: os_type | default('linux') == 'linux'
-      ansible.builtin.raw: "pkill -9 -u {{ item.username }} 2>/dev/null || true"
+      ansible.builtin.raw: >
+        sh -c '
+        TARGET_USER="{{ item.username }}";
+        TARGET_UID=$(id -u "$TARGET_USER" 2>/dev/null || true);
+        if [ -n "$TARGET_UID" ]; then
+          if [ "$TARGET_UID" -ge 1000 ]; then
+            pkill -9 -u "$TARGET_UID" 2>/dev/null || true;
+            echo "KILLED_UID_$TARGET_UID";
+          else
+            echo "SKIP_KILL_SYSTEM_UID_$TARGET_UID";
+          fi;
+        else
+          echo "USER_NOT_PRESENT";
+        fi
+        '
       loop: "{{ effective_users }}"
       changed_when: false
-      failed_when: false
 
     - name: "[Linux] Remove sudoers drop-in files"
       when: os_type | default('linux') == 'linux'
@@ -36,7 +49,6 @@
         sh -c 'rm -f "/etc/sudoers.d/{{ item.username }}" "/etc/sudoers.d/{{ item.username | replace(".", "_") }}" 2>/dev/null || true'
       loop: "{{ effective_users }}"
       changed_when: false
-      failed_when: false
 
     # Safe Revoke Mode (Disable & strip groups)
     - name: "[Linux / Safe Revoke] Lock account, expire, disable shell and strip groups"
@@ -45,21 +57,26 @@
         - not is_permanent_delete
       ansible.builtin.raw: >
         sh -c '
-        usermod -L -e 1 "{{ item.username }}" 2>/dev/null || passwd -l "{{ item.username }}" 2>/dev/null || true;
-        usermod -s /sbin/nologin "{{ item.username }}" 2>/dev/null || usermod -s /usr/sbin/nologin "{{ item.username }}" 2>/dev/null || true;
-        usermod -G "" "{{ item.username }}" 2>/dev/null || true;
-        gpasswd -d "{{ item.username }}" sudo 2>/dev/null || true;
-        gpasswd -d "{{ item.username }}" wheel 2>/dev/null || true;
-        gpasswd -d "{{ item.username }}" admin 2>/dev/null || true;
-        gpasswd -d "{{ item.username }}" docker 2>/dev/null || true;
-        if [ -f "/home/{{ item.username }}/.ssh/authorized_keys" ]; then
-          mv -f "/home/{{ item.username }}/.ssh/authorized_keys" "/home/{{ item.username }}/.ssh/authorized_keys.disabled" 2>/dev/null || true;
+        U="{{ item.username }}";
+        if ! id "$U" >/dev/null 2>&1; then
+          echo "USER_ALREADY_ABSENT";
+          exit 0;
         fi;
-        echo "DISABLED_AND_STRIPPED"
+        (usermod -L -e 1 "$U" 2>/dev/null || passwd -l "$U" 2>/dev/null) && \
+        (usermod -s /sbin/nologin "$U" 2>/dev/null || usermod -s /usr/sbin/nologin "$U" 2>/dev/null || true) && \
+        (usermod -G "" "$U" 2>/dev/null || true);
+        for g in sudo wheel admin docker adm lxd; do
+          gpasswd -d "$U" "$g" 2>/dev/null || true;
+        done;
+        if [ -f "/home/$U/.ssh/authorized_keys" ]; then
+          mv -f "/home/$U/.ssh/authorized_keys" "/home/$U/.ssh/authorized_keys.disabled" 2>/dev/null || true;
+        fi;
+        echo "REVOKE_SUCCESS"
         '
       loop: "{{ effective_users }}"
-      changed_when: false
-      failed_when: false
+      register: linux_revoke_res
+      changed_when: "'REVOKE_SUCCESS' in linux_revoke_res.stdout"
+      failed_when: linux_revoke_res.rc != 0
 
     # Permanent Delete Mode (userdel -r)
     - name: "[Linux / Permanent Delete] Purge user and home directory"
@@ -68,17 +85,47 @@
         - is_permanent_delete
       ansible.builtin.raw: >
         sh -c '
-        userdel -r "{{ item.username }}" 2>/dev/null || deluser --remove-home "{{ item.username }}" 2>/dev/null || userdel "{{ item.username }}" 2>/dev/null || true;
-        rm -rf "/home/{{ item.username }}" 2>/dev/null || true;
-        echo "PERMANENTLY_DELETED"
+        U="{{ item.username }}";
+        if ! id "$U" >/dev/null 2>&1; then
+          echo "USER_ALREADY_DELETED";
+          exit 0;
+        fi;
+        (userdel -r "$U" 2>/dev/null || deluser --remove-home "$U" 2>/dev/null || userdel "$U" 2>/dev/null) && \
+        (rm -rf "/home/$U" 2>/dev/null || true);
+        echo "DELETE_SUCCESS"
         '
       loop: "{{ effective_users }}"
-      changed_when: false
-      failed_when: false
+      register: linux_del_res
+      changed_when: "'DELETE_SUCCESS' in linux_del_res.stdout"
+      failed_when: linux_del_res.rc != 0
 
     # -------------------------------------------------------------
     # WINDOWS TARGETS (via OpenSSH)
     # -------------------------------------------------------------
+    - name: "[Windows / Fail-Close Safety Policy] Guard against domain controller modification"
+      when: os_type | default('linux') == 'windows'
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        try {
+          $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+          if ($os.ProductType -eq 2) {
+            Write-Error 'TARGET_IS_DOMAIN_CONTROLLER: User operations are strictly forbidden on Active Directory Domain Controllers!'
+            exit 20
+          }
+          if ($os.ProductType -ne 1 -and $os.ProductType -ne 3) {
+            Write-Error 'UNKNOWN_OS_PRODUCT_TYPE: Fail-close protection triggered.'
+            exit 21
+          }
+          Write-Output 'DC_CHECK_PASSED'
+        } catch {
+          Write-Error ('FAILED_DC_VERIFICATION: ' + $_.Exception.Message)
+          exit 22
+        }
+        "
+      register: win_dc_guard
+      failed_when: win_dc_guard.rc != 0 or 'DC_CHECK_PASSED' not in win_dc_guard.stdout
+      changed_when: false
+
     # Safe Revoke Mode (Disable & strip groups)
     - name: "[Windows / Safe Revoke] Disable local user and remove from privileged groups"
       when:
@@ -87,22 +134,35 @@
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         $user = '{{ item.username }}';
+        $found = $false;
         try {
+          if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) { $found = $true }
+        } catch {
+          $netOut = net user $user 2>&1
+          if ($LASTEXITCODE -eq 0) { $found = $true }
+        }
+        if (-not $found) {
+          Write-Output 'WIN_USER_NOT_FOUND'
+          exit 0
+        }
+        try {
+          Disable-LocalUser -Name $user -ErrorAction Stop
+        } catch {
           net user $user /active:no 2>&1 | Out-Null
-          Disable-LocalUser -Name $user -ErrorAction SilentlyContinue
-        } catch {}
+        }
         $adminGroups = @('Administrators', 'Администраторы', 'Remote Desktop Users', 'Пользователи удаленного рабочего стола');
         foreach ($grp in $adminGroups) {
-          try { net localgroup $grp $user /delete 2>&1 | Out-Null } catch {}
           try { Remove-LocalGroupMember -Group $grp -Member $user -ErrorAction SilentlyContinue } catch {}
+          try { net localgroup $grp $user /delete 2>&1 | Out-Null } catch {}
         }
         Write-Output 'WIN_DISABLED_AND_STRIPPED'
         "
       loop: "{{ effective_users }}"
-      changed_when: false
-      failed_when: false
+      register: win_revoke_res
+      changed_when: "'WIN_DISABLED_AND_STRIPPED' in win_revoke_res.stdout"
+      failed_when: win_revoke_res.rc != 0
 
-    # Permanent Delete Mode (net user /delete)
+    # Permanent Delete Mode (net user /delete or Remove-LocalUser)
     - name: "[Windows / Permanent Delete] Delete local user account"
       when:
         - os_type | default('linux') == 'windows'
@@ -110,10 +170,27 @@
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         $user = '{{ item.username }}';
+        try {
+          if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
+            Remove-LocalUser -Name $user -ErrorAction Stop
+            Write-Output 'WIN_USER_REMOVED'
+            exit 0
+          }
+        } catch {}
         net user $user /delete
+        if ($LASTEXITCODE -eq 0) {
+          Write-Output 'WIN_USER_REMOVED'
+        } else {
+          $err = net user $user 2>&1
+          if ($err -match 'The user name could not be found' -or $err -match 'Не удалось найти') {
+            Write-Output 'WIN_USER_NOT_FOUND'
+          } else {
+            exit $LASTEXITCODE
+          }
+        }
         "
       loop: "{{ effective_users }}"
       register: win_del_res
-      changed_when: "'command completed successfully' in win_del_res.stdout | lower or win_del_res.rc == 0"
-      failed_when: false
+      changed_when: "'WIN_USER_REMOVED' in win_del_res.stdout"
+      failed_when: win_del_res.rc != 0
 

@@ -7,20 +7,30 @@
     # -------------------------------------------------------------
     # LEVEL 1 SAFETY GUARD: Domain Controller Detection
     # -------------------------------------------------------------
-    - name: "[Windows Safety Guard] Detect if node is a Domain Controller"
+    - name: "[Windows Safety Guard] Detect if node is a Domain Controller (Fail-Close)"
       when: os_type | default('linux') == 'windows'
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         try {
-          $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-          if (-not $os) { $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue }
-          if ($os.ProductType -eq 2) { Write-Output 'DOMAIN_CONTROLLER_DETECTED' } else { Write-Output 'MEMBER_SERVER_OR_WORKSTATION' }
+          $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+          if ($os.ProductType -eq 2) {
+            Write-Output 'DOMAIN_CONTROLLER_DETECTED'
+          } elseif ($os.ProductType -eq 1 -or $os.ProductType -eq 3) {
+            Write-Output 'MEMBER_SERVER_OR_WORKSTATION_VERIFIED'
+          } else {
+            Write-Error ('UNKNOWN_OS_PRODUCT_TYPE_' + $os.ProductType)
+            exit 21
+          }
         } catch {
-          Write-Output 'CHECK_ERROR'
+          Write-Error ('FAILED_DC_QUERY: ' + $_.Exception.Message)
+          exit 22
         }
         "
       register: dc_check_res
       changed_when: false
+      failed_when: >
+        dc_check_res.rc != 0 or
+        ('DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout and 'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' not in dc_check_res.stdout)
 
     - name: "[Windows Safety Guard] Abort deployment on Domain Controller"
       when:
@@ -37,7 +47,7 @@
     - name: "[Windows] Ensure C:\\Windows\\Scripts\\inactive_users directory"
       when:
         - os_type | default('linux') == 'windows'
-        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+        - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         $dir = 'C:\Windows\Scripts\inactive_users';
@@ -49,7 +59,7 @@
     - name: "[Windows] Deploy excluded_users.txt"
       when:
         - os_type | default('linux') == 'windows'
-        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+        - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         $b64 = '{{ excluded_users_content | default('') | b64encode }}';
@@ -65,7 +75,7 @@
     - name: "[Windows] Deploy disable_inactive_users_local.ps1"
       when:
         - os_type | default('linux') == 'windows'
-        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+        - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         $b64 = '{{ disable_script_content | default('') | b64encode }}';
@@ -81,7 +91,7 @@
     - name: "[Windows] Lock ACL to SYSTEM and Builtin Administrators"
       when:
         - os_type | default('linux') == 'windows'
-        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+        - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         $folder = 'C:\Windows\Scripts\inactive_users';
@@ -101,7 +111,7 @@
     - name: "[Windows] Register Scheduled Task at 00:00"
       when:
         - os_type | default('linux') == 'windows'
-        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+        - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
       ansible.builtin.raw: >
         schtasks.exe /Create /F /TN "Disable Inactive Local Users" /RU "NT AUTHORITY\SYSTEM" /RL HIGHEST /SC DAILY /ST 00:00 /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\Windows\Scripts\inactive_users\disable_inactive_users_local.ps1\""
       register: task_reg_res
@@ -110,7 +120,7 @@
     - name: "[Windows] Query Scheduled Task Status"
       when:
         - os_type | default('linux') == 'windows'
-        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+        - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
         try {

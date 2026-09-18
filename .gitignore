@@ -29,3 +29,5 @@ temp/
 .DS_Store
 Thumbs.db
 cookies.txt
+*.zip
+AUDIT_PROMPT_CHATGPT.md

@@ -7,12 +7,12 @@ services:
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-5050}:5050"
     environment:
-      - SECRET_KEY=${SECRET_KEY:-ansible-web-secret-key-prod-super-secure}
+      - SECRET_KEY=${SECRET_KEY:-}
       - FERNET_KEY=${FERNET_KEY:-}
       - ANSIBLE_FORKS=${ANSIBLE_FORKS:-100}
       - ANSIBLE_TIMEOUT=${ANSIBLE_TIMEOUT:-15}
       - OPENSSL_CONF=/app/openssl_legacy.cnf
-    command: ["gunicorn", "--bind", "0.0.0.0:5050", "--workers", "1", "--threads", "8", "--timeout", "120", "--reload", "app:app"]
+    command: ["gunicorn", "--bind", "0.0.0.0:5050", "--workers", "1", "--threads", "8", "--timeout", "120", "app:app"]
     volumes:
       - ./instance:/app/instance
       - ./playbooks:/app/playbooks
