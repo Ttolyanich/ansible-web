@@ -6,67 +6,69 @@
   tasks:
     - name: "[Windows Audit] Check Inactive Users Task and Configuration"
       when: os_type | default('linux') == 'windows'
-      ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        $res = @{
-          IsDC = $false;
-          DirExists = $false;
-          ExclusionsCount = 0;
-          ScriptExists = $false;
-          TaskInstalled = $false;
-          TaskState = 'NotInstalled';
-          LastRun = 'Never';
-          NextRun = 'None';
-          LastLogSummary = 'No logs'
-        };
-
-        try {
-          $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-          if (-not $os) { $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue }
-          if ($os.ProductType -eq 2) { $res.IsDC = $true }
-        } catch {}
-
-        if ($res.IsDC) {
-          Write-Output 'AUDIT: Target is an Active Directory Domain Controller (ProductType=2). Inactive users disabler should NOT be deployed here.';
-          return;
-        }
-
-        $dir = 'C:\Windows\Scripts\inactive_users';
-        $res.DirExists = Test-Path $dir;
-        $exclPath = Join-Path $dir 'excluded_users.txt';
-        if (Test-Path $exclPath) {
-          $allLines = Get-Content $exclPath;
-          $valid = 0;
-          foreach ($l in $allLines) {
-            if ($l.Trim() -ne '' -and -not $l.Trim().StartsWith('#')) { $valid++ }
-          };
-          $res.ExclusionsCount = $valid;
-        }
-
-        $scriptPath = Join-Path $dir 'disable_inactive_users_local.ps1';
-        $res.ScriptExists = Test-Path $scriptPath;
-
-        try {
-          $t = Get-ScheduledTask -TaskName 'Disable Inactive Local Users' -ErrorAction Stop;
-          $res.TaskInstalled = $true;
-          $res.TaskState = [string]$t.State;
-          $info = Get-ScheduledTaskInfo -TaskName 'Disable Inactive Local Users' -ErrorAction SilentlyContinue;
-          if ($info) {
-            $res.LastRun = [string]$info.LastRunTime;
-            $res.NextRun = [string]$info.NextRunTime;
+      vars:
+        audit_script: |
+          $res = @{
+            IsDC = $false
+            DirExists = $false
+            ExclusionsCount = 0
+            ScriptExists = $false
+            TaskInstalled = $false
+            TaskState = 'NotInstalled'
+            LastRun = 'Never'
+            NextRun = 'None'
+            LastLogSummary = 'No logs'
           }
-        } catch {
-          $res.TaskInstalled = $false;
-          $res.TaskState = 'NotInstalled';
-        }
 
-        $logPath = Join-Path $dir 'DisabledUsersLog.txt';
-        if (Test-Path $logPath) {
-          $lastLines = Get-Content $logPath -Tail 3 -ErrorAction SilentlyContinue;
-          if ($lastLines) { $res.LastLogSummary = ($lastLines -join ' | ') }
-        }
+          try {
+            $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+            if (-not $os) { $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue }
+            if ($os.ProductType -eq 2) { $res.IsDC = $true }
+          } catch {}
 
-        Write-Output ('AUDIT_RESULT: Task=' + $res.TaskState + ' | Exclusions=' + $res.ExclusionsCount + ' | Script=' + $res.ScriptExists + ' | NextRun=' + $res.NextRun + ' | LastRun=' + $res.LastRun + ' | LastLog=[' + $res.LastLogSummary + ']');
-        "
+          if ($res.IsDC) {
+            Write-Output 'AUDIT: Target is an Active Directory Domain Controller (ProductType=2). Inactive users disabler should NOT be deployed here.'
+            exit 0
+          }
+
+          $dir = 'C:\Windows\Scripts\inactive_users'
+          $res.DirExists = Test-Path $dir
+          $exclPath = Join-Path $dir 'excluded_users.txt'
+          if (Test-Path $exclPath) {
+            $allLines = Get-Content $exclPath -ErrorAction SilentlyContinue
+            $valid = 0
+            foreach ($l in $allLines) {
+              if ($l.Trim() -ne '' -and -not $l.Trim().StartsWith('#')) { $valid++ }
+            }
+            $res.ExclusionsCount = $valid
+          }
+
+          $scriptPath = Join-Path $dir 'disable_inactive_users_local.ps1'
+          $res.ScriptExists = Test-Path $scriptPath
+
+          try {
+            $t = Get-ScheduledTask -TaskName 'Disable Inactive Local Users' -ErrorAction Stop
+            $res.TaskInstalled = $true
+            $res.TaskState = [string]$t.State
+            $info = Get-ScheduledTaskInfo -TaskName 'Disable Inactive Local Users' -ErrorAction SilentlyContinue
+            if ($info) {
+              $res.LastRun = [string]$info.LastRunTime
+              $res.NextRun = [string]$info.NextRunTime
+            }
+          } catch {
+            $res.TaskInstalled = $false
+            $res.TaskState = 'NotInstalled'
+          }
+
+          $logPath = Join-Path $dir 'DisabledUsersLog.txt'
+          if (Test-Path $logPath) {
+            $lastLines = Get-Content $logPath -Tail 3 -ErrorAction SilentlyContinue
+            if ($lastLines) { $res.LastLogSummary = ($lastLines -join ' | ') }
+          }
+
+          Write-Output ('AUDIT_RESULT: Task=' + $res.TaskState + ' | Exclusions=' + $res.ExclusionsCount + ' | Script=' + $res.ScriptExists + ' | NextRun=' + $res.NextRun + ' | LastRun=' + $res.LastRun + ' | LastLog=[' + $res.LastLogSummary + ']')
+          exit 0
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ audit_script | b64encode(encoding='utf-16-le') }}
       register: audit_res
       changed_when: false

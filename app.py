@@ -1212,7 +1212,10 @@ def run_user_ops():
 # Playbooks & Automation Catalog
 # -------------------------------------------------------------
 PLAYBOOKS_DIR = os.path.join(os.path.dirname(__file__), "playbooks")
-SYSTEM_PLAYBOOKS = {"ping_check.yml", "user_create.yml", "user_delete.yml"}
+SYSTEM_PLAYBOOKS = {
+    "ping_check.yml", "user_create.yml", "user_delete.yml",
+    "win_disable_inactive_users.yml", "win_audit_inactive_users.yml"
+}
 
 
 def get_playbook_meta(filename: str):
@@ -1272,6 +1275,16 @@ def get_playbook_meta(filename: str):
         meta["description"] = "Завершение процессов пользователя, удаление домашних каталогов и sudo-прав."
         meta["icon"] = "fa-solid fa-user-minus"
         meta["icon_bg"] = "bg-red-500/10 text-red-400"
+    elif fn == "win_disable_inactive_users.yml":
+        meta["title"] = "Автоблокировка неактивных пользователей Windows"
+        meta["description"] = "Развертывание скрипта автоблокировки учеток (>45 дней неактивности), списка исключений и задачи в планировщике Windows."
+        meta["icon"] = "fa-solid fa-user-lock"
+        meta["icon_bg"] = "bg-violet-500/10 text-violet-400"
+    elif fn == "win_audit_inactive_users.yml":
+        meta["title"] = "Аудит автоблокировки пользователей Windows"
+        meta["description"] = "Проверка статуса задачи планировщика, времени запуска и логов автоблокировки на серверах."
+        meta["icon"] = "fa-solid fa-clipboard-check"
+        meta["icon_bg"] = "bg-amber-500/10 text-amber-400"
     elif "system_update" in fn:
         meta["title"] = meta["title"] if meta["title"] != filename else "Безопасное обновление пакетов ОС"
         meta["description"] = "Обновление репозиториев и пакетов безопасности (apt-get / yum / dnf / apk)."
@@ -1551,6 +1564,12 @@ def playbook_run_post(filename):
         extra_vars["target_service"] = target_svc
         extra_vars["target_action"] = target_act
         extra_vars["service_state"] = action_map[target_act]
+
+    if clean_filename == "win_disable_inactive_users.yml":
+        if "excluded_users_content" not in extra_vars:
+            extra_vars["excluded_users_content"] = build_inactive_users_exclusions()
+        if "disable_script_content" not in extra_vars:
+            extra_vars["disable_script_content"] = DEFAULT_INACTIVE_USERS_SCRIPT
 
     cred_profile_id = request.form.get("credential_profile_id")
     if cred_profile_id and cred_profile_id.isdigit():

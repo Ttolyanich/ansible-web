@@ -33,11 +33,18 @@
       when:
         - os_type | default('linux') == 'windows'
         - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
+      vars:
+        create_dir_script: |
+          $dir = 'C:\Windows\Scripts\inactive_users'
+          if (-not (Test-Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            Write-Output 'DIR_CREATED'
+          } else {
+            Write-Output 'DIR_EXISTS'
+          }
+          exit 0
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        $dir = 'C:\Windows\Scripts\inactive_users';
-        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null; Write-Output 'DIR_CREATED' } else { Write-Output 'DIR_EXISTS' }
-        "
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ create_dir_script | b64encode(encoding='utf-16-le') }}
       register: dir_res
       changed_when: "'DIR_CREATED' in dir_res.stdout"
 
@@ -45,15 +52,17 @@
       when:
         - os_type | default('linux') == 'windows'
         - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
+      vars:
+        deploy_excl_script: |
+          $b64 = '{{ excluded_users_content | default('') | b64encode }}'
+          $bytes = [System.Convert]::FromBase64String($b64)
+          $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+          $target = 'C:\Windows\Scripts\inactive_users\excluded_users.txt'
+          [System.IO.File]::WriteAllText($target, $text, [System.Text.Encoding]::UTF8)
+          Write-Output 'EXCLUSIONS_WRITTEN'
+          exit 0
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        $b64 = '{{ excluded_users_content | default('') | b64encode }}';
-        $bytes = [System.Convert]::FromBase64String($b64);
-        $text = [System.Text.Encoding]::UTF8.GetString($bytes);
-        $target = 'C:\Windows\Scripts\inactive_users\excluded_users.txt';
-        [System.IO.File]::WriteAllText($target, $text, [System.Text.Encoding]::UTF8);
-        Write-Output 'EXCLUSIONS_WRITTEN'
-        "
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ deploy_excl_script | b64encode(encoding='utf-16-le') }}
       register: excl_res
       changed_when: "'EXCLUSIONS_WRITTEN' in excl_res.stdout"
 
@@ -61,15 +70,17 @@
       when:
         - os_type | default('linux') == 'windows'
         - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
+      vars:
+        deploy_ps_script: |
+          $b64 = '{{ disable_script_content | default('') | b64encode }}'
+          $bytes = [System.Convert]::FromBase64String($b64)
+          $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+          $target = 'C:\Windows\Scripts\inactive_users\disable_inactive_users_local.ps1'
+          [System.IO.File]::WriteAllText($target, $text, [System.Text.Encoding]::UTF8)
+          Write-Output 'SCRIPT_WRITTEN'
+          exit 0
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        $b64 = '{{ disable_script_content | default('') | b64encode }}';
-        $bytes = [System.Convert]::FromBase64String($b64);
-        $text = [System.Text.Encoding]::UTF8.GetString($bytes);
-        $target = 'C:\Windows\Scripts\inactive_users\disable_inactive_users_local.ps1';
-        [System.IO.File]::WriteAllText($target, $text, [System.Text.Encoding]::UTF8);
-        Write-Output 'SCRIPT_WRITTEN'
-        "
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ deploy_ps_script | b64encode(encoding='utf-16-le') }}
       register: script_res
       changed_when: "'SCRIPT_WRITTEN' in script_res.stdout"
 
@@ -77,19 +88,21 @@
       when:
         - os_type | default('linux') == 'windows'
         - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
+      vars:
+        acl_script: |
+          $folder = 'C:\Windows\Scripts\inactive_users'
+          $acl = Get-Acl -Path $folder
+          $rules = @($acl.Access)
+          foreach ($r in $rules) { try { $acl.RemoveAccessRule($r) } catch {} }
+          $ruleSys = New-Object System.Security.AccessControl.FileSystemAccessRule('NT AUTHORITY\SYSTEM', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+          $ruleAdm = New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Administrators', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+          $acl.SetAccessRule($ruleSys)
+          $acl.SetAccessRule($ruleAdm)
+          Set-Acl -Path $folder -AclObject $acl
+          Write-Output 'ACL_PROTECTED'
+          exit 0
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        $folder = 'C:\Windows\Scripts\inactive_users';
-        $acl = Get-Acl -Path $folder;
-        $rules = @($acl.Access);
-        foreach ($r in $rules) { try { $acl.RemoveAccessRule($r) } catch {} };
-        $ruleSys = New-Object System.Security.AccessControl.FileSystemAccessRule('NT AUTHORITY\SYSTEM', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow');
-        $ruleAdm = New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Administrators', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow');
-        $acl.SetAccessRule($ruleSys);
-        $acl.SetAccessRule($ruleAdm);
-        Set-Acl -Path $folder -AclObject $acl;
-        Write-Output 'ACL_PROTECTED'
-        "
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ acl_script | b64encode(encoding='utf-16-le') }}
       register: acl_res
       changed_when: "'ACL_PROTECTED' in acl_res.stdout"
 
@@ -106,15 +119,17 @@
       when:
         - os_type | default('linux') == 'windows'
         - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
+      vars:
+        query_task_script: |
+          try {
+            $t = Get-ScheduledTask -TaskName 'Disable Inactive Local Users' -ErrorAction Stop
+            $info = Get-ScheduledTaskInfo -TaskName 'Disable Inactive Local Users' -ErrorAction SilentlyContinue
+            Write-Output ('TASK_STATUS: State=' + $t.State + ' | NextRun=' + $info.NextRunTime + ' | LastRun=' + $info.LastRunTime + ' | LastResult=' + $info.LastTaskResult)
+            exit 0
+          } catch {
+            schtasks.exe /Query /TN 'Disable Inactive Local Users' /FO LIST /V
+          }
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        try {
-          $t = Get-ScheduledTask -TaskName 'Disable Inactive Local Users' -ErrorAction Stop;
-          $info = Get-ScheduledTaskInfo -TaskName 'Disable Inactive Local Users' -ErrorAction SilentlyContinue;
-          Write-Output ('TASK_STATUS: State=' + $t.State + ' | NextRun=' + $info.NextRunTime + ' | LastRun=' + $info.LastRunTime + ' | LastResult=' + $info.LastTaskResult);
-        } catch {
-          schtasks.exe /Query /TN 'Disable Inactive Local Users' /FO LIST /V
-        }
-        "
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ query_task_script | b64encode(encoding='utf-16-le') }}
       register: task_status_res
       changed_when: false
