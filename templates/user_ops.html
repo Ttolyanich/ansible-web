@@ -108,6 +108,40 @@
                     </select>
                 </div>
 
+                <!-- Preselected Host Picker Row -->
+                <div id="scope-preselected-wrapper" class="{% if not selected_host_ids %}hidden{% endif %} pt-2 space-y-2">
+                    <div class="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-xs flex-wrap gap-2">
+                        <div class="flex items-center gap-2">
+                            <i class="fa-solid fa-magnifying-glass text-slate-500"></i>
+                            <input type="text" id="host-search" placeholder="Поиск по имени или IP..." onkeyup="filterHostList()" class="px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-white text-xs placeholder-slate-500 focus:outline-none w-52 sm:w-64">
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button type="button" onclick="selectAllHosts(true)" class="text-xs text-red-400 hover:text-red-300 font-medium cursor-pointer">Выбрать все</button>
+                            <span class="text-slate-600">|</span>
+                            <button type="button" onclick="selectAllHosts(false)" class="text-xs text-slate-400 hover:text-slate-300 font-medium cursor-pointer">Сбросить</button>
+                        </div>
+                    </div>
+
+                    <div class="max-h-60 overflow-y-auto border border-slate-800 rounded-lg divide-y divide-slate-800/80 bg-slate-950/60 p-1" id="hosts-container">
+                        {% for h in all_hosts %}
+                        <label class="flex items-center justify-between p-2 hover:bg-slate-900 rounded cursor-pointer host-item-row" data-name="{{ h.name|lower }}" data-ip="{{ (h.ip or '')|lower }}">
+                            <div class="flex items-center gap-2.5 min-w-0">
+                                <input type="checkbox" name="selected_hosts" value="{{ h.id }}" onchange="updateSelectedHostCount()" class="host-checkbox rounded border-slate-700 bg-slate-900 text-red-600 focus:ring-red-500" {% if h.id|string in selected_host_ids or h.id in selected_host_ids %}checked{% endif %}>
+                                <span class="text-xs font-semibold text-white truncate">{{ h.name }}</span>
+                                <span class="text-[11px] font-mono text-slate-400 shrink-0">({{ h.ip or 'No IP' }})</span>
+                                {% if h.is_domain_controller %}
+                                <span class="px-1.5 py-0.2 rounded text-[10px] bg-red-950/80 text-red-300 border border-red-800 font-mono">DC</span>
+                                {% endif %}
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                                <span class="text-[10px] text-slate-500 truncate max-w-[120px]">{{ h.group.name if h.group else '' }}</span>
+                                <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{{ h.os_type }}</span>
+                            </div>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <!-- OS Filter -->
                     <div>
@@ -447,11 +481,46 @@
     function toggleTargetScope() {
         const targetType = document.querySelector('input[name="target_type"]:checked').value;
         const groupWrapper = document.getElementById('scope-group-wrapper');
-        if (targetType === 'group') {
-            groupWrapper.classList.remove('hidden');
-        } else {
-            groupWrapper.classList.add('hidden');
+        const preselectedWrapper = document.getElementById('scope-preselected-wrapper');
+        if (groupWrapper) {
+            if (targetType === 'group') groupWrapper.classList.remove('hidden');
+            else groupWrapper.classList.add('hidden');
         }
+        if (preselectedWrapper) {
+            if (targetType === 'preselected') preselectedWrapper.classList.remove('hidden');
+            else preselectedWrapper.classList.add('hidden');
+        }
+    }
+
+    function filterHostList() {
+        const q = (document.getElementById('host-search').value || '').toLowerCase().trim();
+        const rows = document.querySelectorAll('.host-item-row');
+        rows.forEach(r => {
+            const name = r.dataset.name || '';
+            const ip = r.dataset.ip || '';
+            if (!q || name.includes(q) || ip.includes(q)) {
+                r.classList.remove('hidden');
+            } else {
+                r.classList.add('hidden');
+            }
+        });
+    }
+
+    function selectAllHosts(state) {
+        const checkboxes = document.querySelectorAll('.host-checkbox');
+        checkboxes.forEach(cb => {
+            const row = cb.closest('.host-item-row');
+            if (!row || !row.classList.contains('hidden')) {
+                cb.checked = state;
+            }
+        });
+        updateSelectedHostCount();
+    }
+
+    function updateSelectedHostCount() {
+        const checked = document.querySelectorAll('.host-checkbox:checked').length;
+        const badge = document.getElementById('preselected-badge');
+        if (badge) badge.innerText = checked;
     }
 
     function selectAllStaff(state) {
@@ -480,6 +549,15 @@
     }
 
     function confirmAction() {
+        const targetType = document.querySelector('input[name="target_type"]:checked').value;
+        if (targetType === 'preselected') {
+            const checkedHosts = document.querySelectorAll('.host-checkbox:checked').length;
+            if (checkedHosts === 0) {
+                alert('Пожалуйста, выберите хотя бы один целевой сервер из списка!');
+                return false;
+            }
+        }
+
         const op = document.querySelector('input[name="operation"]:checked').value;
         const sourceMode = document.querySelector('input[name="source_mode"]:checked').value;
         const protectedList = ['ansible', 'root', 'admin', 'administrator', 'system'];
@@ -529,5 +607,6 @@
     toggleOperationMode();
     toggleTargetScope();
     toggleSourceMode();
+    updateSelectedHostCount();
 </script>
 {% endblock %}

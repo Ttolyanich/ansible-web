@@ -776,9 +776,60 @@ def batch_assign_custom_group():
     return redirect(request.referrer or url_for("hosts_view"))
 
 
-# -------------------------------------------------------------
-# Inactive Users Disabler & Scheduled Task (Windows)
-# -------------------------------------------------------------
+@app.route("/staff/service-accounts", methods=["GET", "POST"])
+@login_required
+@admin_required
+def manage_service_accounts():
+    instance_file = os.path.join(os.path.dirname(__file__), "instance", "service_accounts.txt")
+    if request.method == "POST":
+        content = request.form.get("content", "")
+        cleaned_lines = []
+        for line in content.splitlines():
+            line_str = line.strip()
+            if line_str:
+                cleaned_lines.append(line_str)
+        new_content = "\n".join(cleaned_lines) + "\n"
+        os.makedirs(os.path.dirname(instance_file), exist_ok=True)
+        with open(instance_file, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        account_names = [l for l in cleaned_lines if not l.startswith("#")]
+        log_entry = AuditLog(
+            user_id=current_user.id,
+            action="UPDATE_SERVICE_ACCOUNTS",
+            details=f"Обновлен список сервисных исключений: {len(account_names)} аккаунтов"
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.is_json:
+            return jsonify({
+                "status": "success",
+                "message": "Список сервисных учетных записей успешно сохранен.",
+                "count": len(account_names)
+            })
+        flash("Список сервисных учетных записей успешно сохранен.", "success")
+        return redirect(url_for("staff_view"))
+
+    raw_content = ""
+    if os.path.exists(instance_file):
+        try:
+            with open(instance_file, "r", encoding="utf-8-sig") as f:
+                raw_content = f.read()
+        except Exception as e:
+            logger.warning(f"Failed to read {instance_file}: {e}")
+    else:
+        raw_content = "# Service accounts (stored locally outside Git)\n"
+
+    accounts = [line.strip() for line in raw_content.splitlines() if line.strip() and not line.strip().startswith("#")]
+    return jsonify({
+        "status": "success",
+        "raw_text": raw_content,
+        "accounts": accounts,
+        "count": len(accounts)
+    })
+
+
 @app.route("/staff/inactive-users/preview")
 @login_required
 def inactive_users_preview():
@@ -899,6 +950,7 @@ def user_ops_view():
         if ansible_staff:
             selected_staff_ids = [str(ansible_staff.id)]
 
+    all_hosts = Host.query.filter_by(is_enabled=True).order_by(Host.name.asc()).all()
     credential_profiles = CredentialProfile.query.order_by(CredentialProfile.os_type, CredentialProfile.is_default.desc(), CredentialProfile.name).all()
 
     return render_template(
@@ -906,6 +958,7 @@ def user_ops_view():
         groups=groups,
         custom_groups=custom_groups,
         dc_count=dc_count,
+        all_hosts=all_hosts,
         all_hosts_count=all_hosts_count,
         selected_host_ids=selected_host_ids,
         selected_group_id=request.args.get("group_id", ""),
@@ -977,8 +1030,8 @@ def run_user_ops():
 
     if target_type == "preselected":
         ids_list = []
-        # Source 1: form getlist for 'host_ids' or 'selected_host_ids'
-        for val in request.form.getlist("host_ids") + request.form.getlist("selected_host_ids"):
+        # Source 1: form getlist for 'host_ids', 'selected_host_ids', or 'selected_hosts'
+        for val in request.form.getlist("host_ids") + request.form.getlist("selected_host_ids") + request.form.getlist("selected_hosts"):
             if str(val).isdigit():
                 ids_list.append(int(val))
 
