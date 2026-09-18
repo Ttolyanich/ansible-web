@@ -359,6 +359,48 @@ def test_ssh_key_normalization_and_ping_escalation():
     assert not valid_ppk and "PuTTY" in err_ppk, "Should reject PPK format!"
     print("  [OK] validate_ssh_key rejects public keys and PPK formats.")
 
+def test_audit_security_fixes():
+    print("\n--- 10. Testing Audit Security Fixes (P0/P1/P2) ---")
+    from app import is_valid_username, validate_safe_extra_vars
+    from task_engine import sanitize_extra_vars_for_storage, DEFAULT_INACTIVE_USERS_SCRIPT
+
+    # 1. Username policy
+    assert is_valid_username("a.ivanov") is True
+    assert is_valid_username("user_123") is True
+    assert is_valid_username("0") is False, "Numeric username '0' must be rejected"
+    assert is_valid_username("12345") is False, "Numeric username '12345' must be rejected"
+    assert is_valid_username("-admin") is False, "Username starting with hyphen must be rejected"
+    assert is_valid_username("a") is False, "Single character username must be rejected"
+    assert is_valid_username("a" * 33) is False, "Username over 32 chars must be rejected"
+    print("  [OK] is_valid_username strict POSIX policy verified.")
+
+    # 2. Safe extra_vars policy
+    assert validate_safe_extra_vars({"target_service": "nginx", "service_state": "restarted"})[0] is True
+    assert validate_safe_extra_vars({"ansible_ssh_common_args": "-o ProxyCommand=evil"})[0] is False
+    assert validate_safe_extra_vars({"ansible_python_interpreter": "/bin/sh"})[0] is False
+    assert validate_safe_extra_vars({"effective_users": [{"username": "hacked"}]})[0] is False
+    assert validate_safe_extra_vars({"bad key!": "val"})[0] is False
+    print("  [OK] validate_safe_extra_vars injection prevention verified.")
+
+    # 3. Secret scrubbing for filter_info / DB persistence
+    sample = {
+        "target_users": [{"username": "john", "password": "SuperSecretPassword123!", "ssh_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnopqrstuvwxyz0123456789 user@host"}],
+        "normal_var": 123,
+        "token": "secret_token_abc"
+    }
+    sanitized = sanitize_extra_vars_for_storage(sample)
+    assert sanitized["target_users"][0]["password"] == "******"
+    assert sanitized["token"] == "******"
+    assert sanitized["normal_var"] == 123
+    assert "TRUNCATED" in sanitized["target_users"][0]["ssh_key"]
+    print("  [OK] sanitize_extra_vars_for_storage verified.")
+
+    # 4. Inactive users script hardening
+    assert "FAIL-CLOSE: Unable to verify Operating System ProductType" in DEFAULT_INACTIVE_USERS_SCRIPT
+    assert "CRITICAL: Exclusions file" in DEFAULT_INACTIVE_USERS_SCRIPT
+    assert "PasswordLastSet" in DEFAULT_INACTIVE_USERS_SCRIPT
+    print("  [OK] DEFAULT_INACTIVE_USERS_SCRIPT Fail-Close and fresh account safety verified.")
+
 if __name__ == "__main__":
     try:
         test_syntax()
@@ -370,6 +412,7 @@ if __name__ == "__main__":
         test_ssh_port_handling()
         test_os_detection_and_manual_preservation()
         test_ssh_key_normalization_and_ping_escalation()
+        test_audit_security_fixes()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")
