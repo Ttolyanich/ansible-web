@@ -32,28 +32,32 @@
                 <i class="fa-solid fa-robot text-amber-300"></i>
                 <span>Ansible (<span id="selected-count-ansible">0</span>)</span>
             </button>
-            <button type="button" onclick="submitBatchAction('user_ops')" class="col-span-2 sm:col-span-1 justify-center px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5 cursor-pointer">
+            <button type="button" onclick="submitBatchAction('user_ops')" class="justify-center px-3.5 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow-sm transition flex items-center gap-1.5 cursor-pointer">
                 <i class="fa-solid fa-user-gear"></i>
                 <span>Учетки (<span id="selected-count-user">0</span>)</span>
+            </button>
+            <button type="button" onclick="openAssignTagModal()" class="col-span-2 sm:col-span-1 justify-center px-3.5 py-2 bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 text-xs font-semibold rounded-lg border border-indigo-800 transition flex items-center gap-1.5 cursor-pointer" title="Назначить или снять внутреннюю метку/группу">
+                <i class="fa-solid fa-tags text-indigo-400"></i>
+                <span>Метки (<span id="selected-count-tag">0</span>)</span>
             </button>
         </div>
     </div>
 
     <!-- Tabs for Servers vs Equipment -->
     <div class="flex items-center gap-2 border-b border-slate-800 pb-3 flex-wrap">
-        <a href="{{ url_for('hosts_view', tab='servers', q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
+        <a href="{{ url_for('hosts_view', tab='servers', q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
            class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'servers' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
             <i class="fa-solid fa-server"></i>
             <span>Серверы (SSH)</span>
             <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-950/60 font-mono">{{ count_servers }}</span>
         </a>
-        <a href="{{ url_for('hosts_view', tab='equipment', q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
+        <a href="{{ url_for('hosts_view', tab='equipment', q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
            class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'equipment' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
             <i class="fa-solid fa-microchip"></i>
             <span>Оборудование (iDRAC / NAS / ИБП)</span>
             <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-950/60 font-mono">{{ count_equipment }}</span>
         </a>
-        <a href="{{ url_for('hosts_view', tab='all', q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
+        <a href="{{ url_for('hosts_view', tab='all', q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
            class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'all' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
             <i class="fa-solid fa-list"></i>
             <span>Все хосты</span>
@@ -63,7 +67,7 @@
 
     <!-- Filters Bar -->
     <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
-        <form method="GET" action="{{ url_for('hosts_view') }}" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+        <form method="GET" action="{{ url_for('hosts_view') }}" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
             <input type="hidden" name="tab" value="{{ tab }}">
             <input type="hidden" name="per_page" value="{{ per_page }}">
             <!-- Search Query -->
@@ -75,11 +79,24 @@
 
             <!-- Group / Company Filter -->
             <div>
-                <label class="block text-slate-400 font-semibold mb-1">Группа / Компания</label>
+                <label class="block text-slate-400 font-semibold mb-1">Группа компании</label>
                 <select name="group_id" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-1 focus:ring-red-500">
                     <option value="">Все группы</option>
                     {% for g in groups %}
                     <option value="{{ g.id }}" {% if filter_group_id|string == g.id|string %}selected{% endif %}>{{ g.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Custom Group / Tag Filter -->
+            <div>
+                <label class="block text-slate-400 font-semibold mb-1">Внутренняя метка</label>
+                <select name="custom_group_id" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-1 focus:ring-red-500">
+                    <option value="">Все метки</option>
+                    {% for cg in custom_groups %}
+                    <option value="{{ cg.id }}" {% if filter_custom_group_id|string == cg.id|string %}selected{% endif %}>
+                        {% if cg.color == 'red' %}🔴{% elif cg.color == 'amber' %}🟠{% elif cg.color == 'emerald' %}🟢{% else %}🏷️{% endif %} {{ cg.name }}
+                    </option>
                     {% endfor %}
                 </select>
             </div>
@@ -151,6 +168,21 @@
                                     {{ host.name }}
                                 </a>
                                 <span class="text-[10px] text-slate-500 font-mono block">ID: {{ host.zabbix_hostid }}</span>
+                                {% if host.custom_groups %}
+                                <div class="flex items-center gap-1 mt-1 flex-wrap">
+                                    {% for cg in host.custom_groups %}
+                                    <span class="text-[9px] font-bold px-1.5 py-0.2 rounded {% if cg.color == 'red' %}bg-red-950 text-red-300 border border-red-800{% elif cg.color == 'amber' %}bg-amber-950 text-amber-300 border border-amber-800{% elif cg.color == 'emerald' %}bg-emerald-950 text-emerald-300 border border-emerald-800{% elif cg.color == 'purple' %}bg-purple-950 text-purple-300 border border-purple-800{% else %}bg-blue-950 text-blue-300 border border-blue-800{% endif %}" title="{{ cg.description }}">
+                                        {{ cg.name }}
+                                    </span>
+                                    {% endfor %}
+                                </div>
+                                {% elif host.is_domain_controller %}
+                                <div class="flex items-center gap-1 mt-1">
+                                    <span class="text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-950 text-red-300 border border-red-800" title="Автоматически определен как контроллер домена (DC)">
+                                        🔴 DC (Авто)
+                                    </span>
+                                </div>
+                                {% endif %}
                             </td>
                             <td class="py-3 px-4 font-mono text-xs text-slate-300">
                                 <div class="flex items-center gap-1.5 flex-wrap">
@@ -438,6 +470,57 @@
         </form>
     </div>
 </div>
+
+<!-- Modal: Assign Custom Group/Tag -->
+<div id="assign-tag-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-md w-full p-6 shadow-2xl">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-base font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-tags text-indigo-400"></i> Назначить / снять метку
+            </h3>
+            <button type="button" onclick="closeAssignTagModal()" class="text-slate-400 hover:text-white">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+        </div>
+
+        <form id="tag-batch-form" method="POST" action="{{ url_for('batch_assign_custom_group') }}" class="space-y-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div id="tag-batch-hidden-hosts"></div>
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Выберите внутреннюю группу (метку)</label>
+                <select name="custom_group_id" required class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-1 focus:ring-indigo-500">
+                    {% for cg in custom_groups %}
+                    <option value="{{ cg.id }}">{{ '🔴 ' if cg.color == 'red' else '🏷️ ' }}{{ cg.name }} ({{ cg.hosts.count() }} серверов)</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">Действие</label>
+                <div class="grid grid-cols-2 gap-2">
+                    <label class="flex items-center gap-2 p-2.5 rounded-lg border border-slate-700 bg-slate-950 text-xs text-white cursor-pointer hover:border-indigo-500">
+                        <input type="radio" name="tag_action" value="add" checked class="text-indigo-600 focus:ring-indigo-500">
+                        <span>Присвоить метку</span>
+                    </label>
+                    <label class="flex items-center gap-2 p-2.5 rounded-lg border border-slate-700 bg-slate-950 text-xs text-white cursor-pointer hover:border-red-500">
+                        <input type="radio" name="tag_action" value="remove" class="text-red-600 focus:ring-red-500">
+                        <span>Снять метку</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+                <button type="button" onclick="closeAssignTagModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition">
+                    Отмена
+                </button>
+                <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-sm transition">
+                    Применить
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -447,6 +530,7 @@
     const countPing = document.getElementById('selected-count-ping');
     const countUser = document.getElementById('selected-count-user');
     const countAnsible = document.getElementById('selected-count-ansible');
+    const countTag = document.getElementById('selected-count-tag');
 
     function updateCount() {
         let count = 0;
@@ -454,6 +538,7 @@
         if (countPing) countPing.innerText = count;
         if (countUser) countUser.innerText = count;
         if (countAnsible) countAnsible.innerText = count;
+        if (countTag) countTag.innerText = count;
     }
 
     if (selectAll) {
@@ -475,11 +560,39 @@
         document.getElementById('create-host-modal').classList.add('hidden');
     }
 
+    function openAssignTagModal() {
+        let checked = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.value);
+        if (checked.length === 0) {
+            alert('Пожалуйста, выберите хотя бы один хост из таблицы для назначения метки!');
+            return;
+        }
+        const container = document.getElementById('tag-batch-hidden-hosts');
+        container.innerHTML = '';
+        checked.forEach(id => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'host_ids';
+            input.value = id;
+            container.appendChild(input);
+        });
+        document.getElementById('assign-tag-modal').classList.remove('hidden');
+    }
+
+    function closeAssignTagModal() {
+        document.getElementById('assign-tag-modal').classList.add('hidden');
+    }
+
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') closeCreateHostModal();
+        if (e.key === 'Escape') {
+            closeCreateHostModal();
+            closeAssignTagModal();
+        }
     });
     document.getElementById('create-host-modal')?.addEventListener('click', function(e) {
         if (e.target === this) closeCreateHostModal();
+    });
+    document.getElementById('assign-tag-modal')?.addEventListener('click', function(e) {
+        if (e.target === this) closeAssignTagModal();
     });
 
     function submitBatchAction(type) {

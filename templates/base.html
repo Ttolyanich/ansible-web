@@ -133,6 +133,11 @@
                     <span class="sidebar-text whitespace-nowrap">Хосты</span>
                 </a>
 
+                <a href="{{ url_for('custom_groups_view') }}" title="Внутренние группы & Метки" class="nav-item flex items-center px-3 py-2.5 rounded-lg transition {% if request.endpoint == 'custom_groups_view' %}bg-red-600 text-white font-semibold shadow-md shadow-red-950/40{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
+                    <i class="fa-solid fa-tags mr-3 text-sm w-5 text-center shrink-0"></i>
+                    <span class="sidebar-text whitespace-nowrap">Метки & Группы</span>
+                </a>
+
                 <a href="{{ url_for('staff_view') }}" title="Каталог сотрудников" class="nav-item flex items-center px-3 py-2.5 rounded-lg transition {% if request.endpoint == 'staff_view' %}bg-red-600 text-white font-semibold shadow-md shadow-red-950/40{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
                     <i class="fa-solid fa-id-badge mr-3 text-sm w-5 text-center shrink-0"></i>
                     <span class="sidebar-text whitespace-nowrap">Сотрудники</span>

@@ -1,0 +1,125 @@
+---
+- name: Deploy Inactive Local Users Disabler on Windows
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    # -------------------------------------------------------------
+    # LEVEL 1 SAFETY GUARD: Domain Controller Detection
+    # -------------------------------------------------------------
+    - name: "[Windows Safety Guard] Detect if node is a Domain Controller"
+      when: os_type | default('linux') == 'windows'
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        try {
+          $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+          if (-not $os) { $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue }
+          if ($os.ProductType -eq 2) { Write-Output 'DOMAIN_CONTROLLER_DETECTED' } else { Write-Output 'MEMBER_SERVER_OR_WORKSTATION' }
+        } catch {
+          Write-Output 'CHECK_ERROR'
+        }
+        "
+      register: dc_check_res
+      changed_when: false
+
+    - name: "[Windows Safety Guard] Abort deployment on Domain Controller"
+      when:
+        - os_type | default('linux') == 'windows'
+        - "'DOMAIN_CONTROLLER_DETECTED' in dc_check_res.stdout"
+      ansible.builtin.raw: >
+        echo "SKIPPED: Target is an Active Directory Domain Controller (ProductType=2). Inactive users disabler is strictly forbidden on Domain Controllers."
+      register: dc_skip_notice
+      changed_when: false
+
+    # -------------------------------------------------------------
+    # DEPLOYMENT ON MEMBER SERVERS & WORKSTATIONS
+    # -------------------------------------------------------------
+    - name: "[Windows] Ensure C:\\Windows\\Scripts\\inactive_users directory"
+      when:
+        - os_type | default('linux') == 'windows'
+        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        $dir = 'C:\Windows\Scripts\inactive_users';
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null; Write-Output 'DIR_CREATED' } else { Write-Output 'DIR_EXISTS' }
+        "
+      register: dir_res
+      changed_when: "'DIR_CREATED' in dir_res.stdout"
+
+    - name: "[Windows] Deploy excluded_users.txt"
+      when:
+        - os_type | default('linux') == 'windows'
+        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        $b64 = '{{ excluded_users_content | default('') | b64encode }}';
+        $bytes = [System.Convert]::FromBase64String($b64);
+        $text = [System.Text.Encoding]::UTF8.GetString($bytes);
+        $target = 'C:\Windows\Scripts\inactive_users\excluded_users.txt';
+        [System.IO.File]::WriteAllText($target, $text, [System.Text.Encoding]::UTF8);
+        Write-Output 'EXCLUSIONS_WRITTEN'
+        "
+      register: excl_res
+      changed_when: "'EXCLUSIONS_WRITTEN' in excl_res.stdout"
+
+    - name: "[Windows] Deploy disable_inactive_users_local.ps1"
+      when:
+        - os_type | default('linux') == 'windows'
+        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        $b64 = '{{ disable_script_content | default('') | b64encode }}';
+        $bytes = [System.Convert]::FromBase64String($b64);
+        $text = [System.Text.Encoding]::UTF8.GetString($bytes);
+        $target = 'C:\Windows\Scripts\inactive_users\disable_inactive_users_local.ps1';
+        [System.IO.File]::WriteAllText($target, $text, [System.Text.Encoding]::UTF8);
+        Write-Output 'SCRIPT_WRITTEN'
+        "
+      register: script_res
+      changed_when: "'SCRIPT_WRITTEN' in script_res.stdout"
+
+    - name: "[Windows] Lock ACL to SYSTEM and Builtin Administrators"
+      when:
+        - os_type | default('linux') == 'windows'
+        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        $folder = 'C:\Windows\Scripts\inactive_users';
+        $acl = Get-Acl -Path $folder;
+        $acl.SetAccessRuleProtection($true, $false);
+        $acl.Access | ForEach-Object { try { $acl.RemoveAccessRule($_) } catch {} };
+        $ruleSys = New-Object System.Security.AccessControl.FileSystemAccessRule('NT AUTHORITY\SYSTEM', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow');
+        $ruleAdm = New-Object System.Security.AccessControl.FileSystemAccessRule('BUILTIN\Administrators', 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow');
+        $acl.SetAccessRule($ruleSys);
+        $acl.SetAccessRule($ruleAdm);
+        Set-Acl -Path $folder -AclObject $acl;
+        Write-Output 'ACL_PROTECTED'
+        "
+      register: acl_res
+      changed_when: "'ACL_PROTECTED' in acl_res.stdout"
+
+    - name: "[Windows] Register Scheduled Task at 00:00"
+      when:
+        - os_type | default('linux') == 'windows'
+        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+      ansible.builtin.raw: >
+        schtasks.exe /Create /F /TN "Disable Inactive Local Users" /RU "NT AUTHORITY\SYSTEM" /RL HIGHEST /SC DAILY /ST 00:00 /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\Windows\Scripts\inactive_users\disable_inactive_users_local.ps1\""
+      register: task_reg_res
+      changed_when: "'SUCCESS' in task_reg_res.stdout or 'успешно' in task_reg_res.stdout | lower"
+
+    - name: "[Windows] Query Scheduled Task Status"
+      when:
+        - os_type | default('linux') == 'windows'
+        - "'DOMAIN_CONTROLLER_DETECTED' not in dc_check_res.stdout"
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        try {
+          $t = Get-ScheduledTask -TaskName 'Disable Inactive Local Users' -ErrorAction Stop;
+          $info = Get-ScheduledTaskInfo -TaskName 'Disable Inactive Local Users' -ErrorAction SilentlyContinue;
+          Write-Output ('TASK_STATUS: State=' + $t.State + ' | NextRun=' + $info.NextRunTime + ' | LastRun=' + $info.LastRunTime + ' | LastResult=' + $info.LastTaskResult);
+        } catch {
+          schtasks.exe /Query /TN 'Disable Inactive Local Users' /FO LIST /V
+        }
+        "
+      register: task_status_res
+      changed_when: false

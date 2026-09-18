@@ -200,6 +200,25 @@ class HostGroup(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# Many-to-Many association for internal custom groups / tags
+host_custom_groups = db.Table(
+    "host_custom_groups",
+    db.Column("host_id", db.Integer, db.ForeignKey("hosts.id", ondelete="CASCADE"), primary_key=True),
+    db.Column("custom_group_id", db.Integer, db.ForeignKey("custom_groups.id", ondelete="CASCADE"), primary_key=True)
+)
+
+
+class CustomGroup(db.Model):
+    """Internal service group/tag for flexible host categorization, filtering and exclusions."""
+    __tablename__ = "custom_groups"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    description = db.Column(db.String(255), nullable=True)
+    color = db.Column(db.String(30), default="blue") # 'red', 'blue', 'amber', 'emerald', 'purple', 'slate'
+    is_system = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class Host(db.Model):
     """Target Server."""
     __tablename__ = "hosts"
@@ -220,6 +239,12 @@ class Host(db.Model):
     credential_id = db.Column(db.Integer, db.ForeignKey("credential_profiles.id", ondelete="SET NULL"), nullable=True)
     
     override_credential = db.relationship("CredentialProfile", foreign_keys=[credential_id])
+    custom_groups = db.relationship(
+        "CustomGroup",
+        secondary=host_custom_groups,
+        backref=db.backref("hosts", lazy="dynamic"),
+        lazy="selectin"
+    )
     last_status = db.Column(db.String(20), default="unknown") # 'online', 'offline', 'unknown'
     last_checked_at = db.Column(db.DateTime, nullable=True)
     last_error = db.Column(db.Text, nullable=True)
@@ -230,6 +255,19 @@ class Host(db.Model):
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def is_domain_controller(self) -> bool:
+        """Check if host is marked as a Domain Controller."""
+        for cg in (self.custom_groups or []):
+            if cg.name.lower() in ["контроллеры домена", "domain controllers", "dc"]:
+                return True
+        name_l = (self.name or "").lower()
+        tmpl_l = (self.zabbix_templates or "").lower()
+        if "_dc" in name_l or "-dc" in name_l or name_l.endswith("dc") or name_l.startswith("dc-") or "domain controller" in tmpl_l:
+            return True
+        return False
+
 
 
 class TaskJob(db.Model):

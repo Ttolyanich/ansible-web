@@ -1047,14 +1047,170 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
             logger.error(f"Failed to commit final task state: {e}")
 
 
-def dispatch_task(app, task_type: str, playbook_name: str, host_ids: List[int], extra_vars: Dict[str, Any], user_id: Optional[int], summary: str, filter_info: str = "") -> int:
-    """Create TaskJob record and submit to thread pool."""
+def get_service_accounts_exclusions() -> List[str]:
+    """
+    Loads service account exclusions dynamically without storing confidential company accounts in Git:
+    1. From local file instance/service_accounts.txt (ignored by Git)
+    2. From INACTIVE_USERS_SERVICE_EXCLUSIONS environment variable (comma or newline separated)
+    3. Safe generic system defaults (Administrator, Guest, DefaultAccount, WDAGUtilityAccount)
+    """
+    instance_file = os.path.join(os.path.dirname(__file__), "instance", "service_accounts.txt")
+    if os.path.exists(instance_file):
+        try:
+            with open(instance_file, "r", encoding="utf-8-sig") as f:
+                accs = [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+                if accs:
+                    return accs
+        except Exception as e:
+            logger.warning(f"Failed to read {instance_file}: {e}")
+
+    env_val = os.getenv("INACTIVE_USERS_SERVICE_EXCLUSIONS", "").strip()
+    if env_val:
+        import re
+        accs = [item.strip() for item in re.split(r"[,\r\n]+", env_val) if item.strip() and not item.strip().startswith("#")]
+        if accs:
+            return accs
+
+    return [
+        "Administrator",
+        "Guest",
+        "DefaultAccount",
+        "WDAGUtilityAccount",
+    ]
+
+
+DEFAULT_INACTIVE_USERS_SCRIPT = r'''param(
+    [int]$InactiveMonths = 2
+)
+
+# SAFETY GUARD: Check if this server is a Domain Controller
+$isDC = $false
+try {
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    if (-not $os) { $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue }
+    if ($os.ProductType -eq 2) { $isDC = $true }
+} catch {
+    try {
+        $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue
+        if ($os.ProductType -eq 2) { $isDC = $true }
+    } catch {}
+}
+
+if ($isDC) {
+    Write-Output "ABORT: Target is an Active Directory Domain Controller (ProductType=2). Inactive local user disabler cannot run on Domain Controllers."
+    exit 0
+}
+
+$scriptFolder = "C:\Windows\Scripts\inactive_users"
+$logFilePath = Join-Path $scriptFolder "DisabledUsersLog.txt"
+$excludeFilePath = Join-Path $scriptFolder "excluded_users.txt"
+
+$inactiveDate = (Get-Date).AddMonths(-$InactiveMonths)
+Write-Output "Cutoff date for inactive accounts: $inactiveDate"
+
+$excludedUsers = @()
+if (Test-Path $excludeFilePath) {
+    $excludedUsers = Get-Content -Path $excludeFilePath | Where-Object { $_.Trim() -ne '' -and $_.Trim() -notlike '#*' }
+    Write-Output "Loaded $($excludedUsers.Count) excluded accounts."
+} else {
+    Write-Output "Exclusions file $excludeFilePath not found - no accounts excluded."
+}
+
+if (-not (Test-Path -Path $logFilePath)) {
+    Out-File -FilePath $logFilePath -Encoding UTF8
+}
+
+$runStart = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+[System.IO.File]::AppendAllText($logFilePath, "--- Run started $runStart ---" + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+
+$localUsers = Get-LocalUser | Where-Object { $_.Enabled -eq $true }
+$disabledCount = 0
+$skippedExcluded = 0
+$errorCount = 0
+
+foreach ($user in $localUsers) {
+    Write-Output "Checking user: $($user.Name)..."
+
+    $isExcluded = $false
+    foreach ($ex in $excludedUsers) {
+        if ($user.Name -eq $ex.Trim()) {
+            $isExcluded = $true
+            break
+        }
+    }
+
+    if ($isExcluded) {
+        Write-Output "  Excluded (matches excluded_users.txt)."
+        $skippedExcluded++
+        continue
+    }
+
+    $lastLogon = $user.LastLogon
+    $lastLogonDisplay = if ($null -eq $lastLogon) { "(never)" } else { $lastLogon }
+    Write-Output "  Last logon: $lastLogonDisplay"
+
+    if ($null -eq $lastLogon -or $lastLogon -lt $inactiveDate) {
+        try {
+            $user | Disable-LocalUser -ErrorAction Stop
+            Write-Output "  Disabled."
+            $disableDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+            $logEntry = "Account: $($user.Name) | Last logon: $lastLogonDisplay | Disabled on: $disableDate"
+            [System.IO.File]::AppendAllText($logFilePath, $logEntry + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+            $disabledCount++
+        } catch {
+            $errEntry = "ERROR disabling $($user.Name): $($_.Exception.Message)"
+            Write-Output "  $errEntry"
+            [System.IO.File]::AppendAllText($logFilePath, $errEntry + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+            $errorCount++
+        }
+    }
+}
+
+$summary = "Summary: disabled=$disabledCount, excluded=$skippedExcluded, errors=$errorCount"
+Write-Output $summary
+[System.IO.File]::AppendAllText($logFilePath, $summary + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+'''
+
+
+def build_inactive_users_exclusions(custom_service_accounts: Optional[List[str]] = None) -> str:
+    """
+    Dynamically generates excluded_users.txt content:
+    - # Service accounts: loaded securely from local instance/ or env
+    - # IT Support Group: active staff/admin usernames dynamically pulled from StaffMember in DB
+    """
+    from models import StaffMember
+    lines = ["# Service accounts"]
+    svc_accs = custom_service_accounts if custom_service_accounts is not None else get_service_accounts_exclusions()
+    for acc in svc_accs:
+        clean = (acc or "").strip()
+        if clean:
+            lines.append(clean)
+    
+    lines.append("# IT Support Group")
+    try:
+        active_staff = StaffMember.query.filter_by(is_active=True).order_by(StaffMember.username).all()
+        for s in active_staff:
+            u = (s.username or "").strip()
+            if u and u.lower() not in [a.lower() for a in svc_accs]:
+                lines.append(u)
+    except Exception as ex:
+        logger.warning(f"Failed to query StaffMember for exclusions: {ex}")
+
+    return "\n".join(lines) + "\n"
+
+
+def dispatch_task(app, task_type: str, playbook_name: str, host_ids: List[int], extra_vars: Dict[str, Any], user_id: Optional[int], summary: str, filter_info: str = "", exclude_host_ids: Optional[List[int]] = None) -> int:
+    """Create TaskJob record and submit to thread pool with optional host exclusions."""
     from models import db, TaskJob, AuditLog
+
+    # Apply exclusion filter if provided
+    final_host_ids = [hid for hid in host_ids if hid not in (exclude_host_ids or [])]
 
     meta_info = {
         "playbook_name": playbook_name,
         "extra_vars": extra_vars,
-        "note": filter_info
+        "note": filter_info,
+        "excluded_hosts_count": len(host_ids) - len(final_host_ids) if exclude_host_ids else 0
     }
     stored_filter_info = json.dumps(meta_info, ensure_ascii=False)
 
@@ -1064,7 +1220,7 @@ def dispatch_task(app, task_type: str, playbook_name: str, host_ids: List[int], 
         summary=summary,
         filter_info=stored_filter_info,
         user_id=user_id,
-        target_count=len(host_ids),
+        target_count=len(final_host_ids),
         created_at=datetime.utcnow()
     )
     db.session.add(task)
@@ -1072,12 +1228,13 @@ def dispatch_task(app, task_type: str, playbook_name: str, host_ids: List[int], 
     audit = AuditLog(
         user_id=user_id,
         action=task_type.upper(),
-        target=f"{len(host_ids)} hosts",
+        target=f"{len(final_host_ids)} hosts (excluded {len(host_ids) - len(final_host_ids)})",
         description=summary
     )
     db.session.add(audit)
     db.session.commit()
 
     # Dispatch to background thread
-    executor.submit(run_ansible_task, app, task.id, playbook_name, host_ids, extra_vars)
+    executor.submit(run_ansible_task, app, task.id, playbook_name, final_host_ids, extra_vars)
     return task.id
+

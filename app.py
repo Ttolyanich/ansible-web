@@ -17,10 +17,13 @@ load_dotenv()
 
 from models import (
     db, User, StaffMember, ZabbixSetting, CredentialProfile, 
-    HostGroup, Host, TaskJob, AuditLog
+    HostGroup, Host, TaskJob, AuditLog, CustomGroup, host_custom_groups
 )
 from zabbix_client import ZabbixClient, sync_zabbix_to_db
-from task_engine import dispatch_task, enable_openssl_legacy_provider
+from task_engine import (
+    dispatch_task, enable_openssl_legacy_provider, 
+    build_inactive_users_exclusions, DEFAULT_INACTIVE_USERS_SCRIPT
+)
 
 enable_openssl_legacy_provider()
 
@@ -203,6 +206,7 @@ def hosts_view():
 
     filter_q = request.args.get("q", "").strip()
     filter_group_id = request.args.get("group_id", "").strip()
+    filter_custom_group_id = request.args.get("custom_group_id", "").strip()
     filter_os = request.args.get("os", "").strip()
     filter_status = request.args.get("status", "").strip()
 
@@ -212,6 +216,8 @@ def hosts_view():
         )
     if filter_group_id:
         query = query.filter_by(group_id=int(filter_group_id))
+    if filter_custom_group_id and filter_custom_group_id.isdigit():
+        query = query.filter(Host.custom_groups.any(CustomGroup.id == int(filter_custom_group_id)))
     if filter_os:
         query = query.filter_by(os_type=filter_os)
     if filter_status:
@@ -240,6 +246,7 @@ def hosts_view():
         hosts = pagination.items
 
     groups = HostGroup.query.order_by(HostGroup.name).all()
+    custom_groups = CustomGroup.query.order_by(CustomGroup.is_system.desc(), CustomGroup.name).all()
     credential_profiles = CredentialProfile.query.order_by(CredentialProfile.name).all()
 
     return render_template(
@@ -248,6 +255,7 @@ def hosts_view():
         pagination=pagination,
         per_page=per_page_raw,
         groups=groups,
+        custom_groups=custom_groups,
         credential_profiles=credential_profiles,
         tab=tab,
         count_servers=count_servers,
@@ -255,6 +263,7 @@ def hosts_view():
         count_total=count_total,
         filter_q=filter_q,
         filter_group_id=filter_group_id,
+        filter_custom_group_id=filter_custom_group_id,
         filter_os=filter_os,
         filter_status=filter_status
     )
@@ -552,7 +561,19 @@ def run_ping_batch():
 @login_required
 def staff_view():
     staff = StaffMember.query.order_by(StaffMember.name).all()
-    return render_template("staff.html", staff=staff)
+    active_staff_count = StaffMember.query.filter_by(is_active=True).count()
+    win_hosts_count = Host.query.filter_by(os_type="windows", is_enabled=True).count()
+    dc_count = Host.query.filter_by(os_type="windows").filter(
+        (Host.custom_groups.any(CustomGroup.name == "Контроллеры домена")) |
+        (Host.name.ilike("%_dc%")) | (Host.name.ilike("%-dc%")) | (Host.name.ilike("%dc")) | (Host.name.ilike("dc-%"))
+    ).count()
+    return render_template(
+        "staff.html",
+        staff=staff,
+        active_staff_count=active_staff_count,
+        win_hosts_count=win_hosts_count,
+        dc_count=dc_count
+    )
 
 @app.route("/staff/create", methods=["POST"])
 @login_required
@@ -653,6 +674,199 @@ def delete_staff(staff_id):
 
 
 # -------------------------------------------------------------
+# Internal Custom Groups / Tags & DC Protection
+# -------------------------------------------------------------
+def auto_tag_domain_controllers() -> int:
+    """Scan all Windows hosts and attach them to the 'Контроллеры домена' group if they match DC criteria."""
+    dc_group = CustomGroup.query.filter_by(name="Контроллеры домена").first()
+    if not dc_group:
+        dc_group = CustomGroup(
+            name="Контроллеры домена",
+            description="Active Directory Domain Controllers (исключаются из локальных сценариев)",
+            color="red",
+            is_system=True
+        )
+        db.session.add(dc_group)
+        db.session.commit()
+
+    win_hosts = Host.query.filter_by(os_type="windows").all()
+    tagged = 0
+    for h in win_hosts:
+        if h.is_domain_controller:
+            if dc_group not in h.custom_groups:
+                h.custom_groups.append(dc_group)
+                tagged += 1
+    if tagged > 0:
+        db.session.commit()
+    return tagged
+
+
+@app.route("/custom-groups", methods=["GET", "POST"])
+@login_required
+def custom_groups_view():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        description = request.form.get("description", "").strip()
+        color = request.form.get("color", "blue").strip()
+        if not name:
+            flash("Имя группы обязательно для заполнения.", "danger")
+            return redirect(url_for("custom_groups_view"))
+        existing = CustomGroup.query.filter_by(name=name).first()
+        if existing:
+            flash(f"Группа с именем «{name}» уже существует.", "warning")
+            return redirect(url_for("custom_groups_view"))
+        new_grp = CustomGroup(name=name, description=description, color=color, is_system=False)
+        db.session.add(new_grp)
+        db.session.commit()
+        flash(f"Внутренняя группа «{name}» успешно создана.", "success")
+        return redirect(url_for("custom_groups_view"))
+
+    groups = CustomGroup.query.order_by(CustomGroup.is_system.desc(), CustomGroup.name).all()
+    return render_template("custom_groups.html", groups=groups)
+
+
+@app.route("/custom-groups/<int:group_id>/delete", methods=["POST"])
+@login_required
+def delete_custom_group(group_id):
+    cg = db.get_or_404(CustomGroup, group_id)
+    if cg.is_system:
+        flash("Системную группу удалить нельзя.", "danger")
+        return redirect(url_for("custom_groups_view"))
+    db.session.delete(cg)
+    db.session.commit()
+    flash(f"Группа «{cg.name}» удалена.", "success")
+    return redirect(url_for("custom_groups_view"))
+
+
+@app.route("/custom-groups/auto-tag-dc", methods=["POST"])
+@login_required
+def trigger_auto_tag_dc():
+    tagged = auto_tag_domain_controllers()
+    flash(f"Авто-поиск DC завершен: привязано {tagged} контроллеров домена.", "success")
+    return redirect(request.referrer or url_for("custom_groups_view"))
+
+
+@app.route("/hosts/batch-custom-groups", methods=["POST"])
+@login_required
+def batch_assign_custom_group():
+    host_ids = request.form.getlist("host_ids")
+    custom_group_id = request.form.get("custom_group_id")
+    action = request.form.get("tag_action", "add") # 'add' or 'remove'
+    if not host_ids or not custom_group_id or not custom_group_id.isdigit():
+        flash("Не выбраны хосты или группа.", "warning")
+        return redirect(request.referrer or url_for("hosts_view"))
+    
+    cg = db.session.get(CustomGroup, int(custom_group_id))
+    if not cg:
+        flash("Группа не найдена.", "danger")
+        return redirect(request.referrer or url_for("hosts_view"))
+    
+    hosts = Host.query.filter(Host.id.in_([int(i) for i in host_ids if str(i).isdigit()])).all()
+    count = 0
+    for h in hosts:
+        if action == "add" and cg not in h.custom_groups:
+            h.custom_groups.append(cg)
+            count += 1
+        elif action == "remove" and cg in h.custom_groups:
+            h.custom_groups.remove(cg)
+            count += 1
+    db.session.commit()
+    act_name = "добавлена к" if action == "add" else "снята с"
+    flash(f"Группа «{cg.name}» {act_name} {count} хостов.", "success")
+    return redirect(request.referrer or url_for("hosts_view"))
+
+
+# -------------------------------------------------------------
+# Inactive Users Disabler & Scheduled Task (Windows)
+# -------------------------------------------------------------
+@app.route("/staff/inactive-users/preview")
+@login_required
+def inactive_users_preview():
+    content = build_inactive_users_exclusions()
+    dc_count = Host.query.filter_by(os_type="windows").filter(
+        (Host.custom_groups.any(CustomGroup.name == "Контроллеры домена")) |
+        (Host.name.ilike("%_dc%")) | (Host.name.ilike("%-dc%")) | (Host.name.ilike("%dc")) | (Host.name.ilike("dc-%"))
+    ).count()
+    win_count = Host.query.filter_by(os_type="windows", is_enabled=True).count()
+    return jsonify({
+        "status": "success",
+        "exclusions_content": content,
+        "script_content": DEFAULT_INACTIVE_USERS_SCRIPT,
+        "total_windows_hosts": win_count,
+        "protected_dc_count": dc_count,
+        "target_hosts_count": max(0, win_count - dc_count)
+    })
+
+
+@app.route("/staff/inactive-users/deploy", methods=["POST"])
+@login_required
+def deploy_inactive_users_task():
+    exclude_dc = request.form.get("exclude_dc", "1") == "1"
+    all_win_hosts = Host.query.filter_by(os_type="windows", is_enabled=True).all()
+    if not all_win_hosts:
+        flash("В системе не найдено активных Windows-хостов.", "warning")
+        return redirect(url_for("staff_view"))
+
+    excluded_ids = []
+    if exclude_dc:
+        for h in all_win_hosts:
+            if h.is_domain_controller:
+                excluded_ids.append(h.id)
+
+    target_ids = [h.id for h in all_win_hosts if h.id not in excluded_ids]
+    if not target_ids:
+        flash("Все Windows-хосты попали в список исключений.", "warning")
+        return redirect(url_for("staff_view"))
+
+    exclusions_text = build_inactive_users_exclusions()
+    extra_vars = {
+        "excluded_users_content": exclusions_text,
+        "disable_script_content": DEFAULT_INACTIVE_USERS_SCRIPT
+    }
+
+    task_id = dispatch_task(
+        app=app,
+        task_type="win_inactive_users_deploy",
+        playbook_name="win_disable_inactive_users.yml",
+        host_ids=target_ids,
+        extra_vars=extra_vars,
+        user_id=current_user.id if current_user.is_authenticated else None,
+        summary=f"Развертывание блокировки неактивных пользователей ({len(target_ids)} хостов, исключено {len(excluded_ids)} DC)",
+        filter_info=f"Исключено DC: {len(excluded_ids)}",
+        exclude_host_ids=excluded_ids
+    )
+
+    flash(f"Запущена задача развертывания автоблокировки на {len(target_ids)} Windows-серверах (исключено {len(excluded_ids)} контроллеров домена)!", "success")
+    return redirect(url_for("task_detail", task_id=task_id))
+
+
+@app.route("/staff/inactive-users/audit", methods=["POST"])
+@login_required
+def audit_inactive_users_task():
+    exclude_dc = request.form.get("exclude_dc", "1") == "1"
+    all_win_hosts = Host.query.filter_by(os_type="windows", is_enabled=True).all()
+    excluded_ids = []
+    if exclude_dc:
+        for h in all_win_hosts:
+            if h.is_domain_controller:
+                excluded_ids.append(h.id)
+    target_ids = [h.id for h in all_win_hosts if h.id not in excluded_ids]
+
+    task_id = dispatch_task(
+        app=app,
+        task_type="win_inactive_users_audit",
+        playbook_name="win_audit_inactive_users.yml",
+        host_ids=target_ids,
+        extra_vars={},
+        user_id=current_user.id if current_user.is_authenticated else None,
+        summary=f"Аудит задачи блокировки неактивных пользователей ({len(target_ids)} хостов, исключено {len(excluded_ids)} DC)",
+        filter_info=f"Исключено DC: {len(excluded_ids)}"
+    )
+    flash(f"Запущен аудит статуса задачи на {len(target_ids)} Windows-серверах!", "info")
+    return redirect(url_for("task_detail", task_id=task_id))
+
+
+# -------------------------------------------------------------
 # User Operations (Create & Delete Master)
 # -------------------------------------------------------------
 @app.route("/user-ops", methods=["GET", "POST"])
@@ -669,6 +883,11 @@ def user_ops_view():
             selected_host_ids = [str(h.id) for h in group_hosts]
 
     groups = HostGroup.query.order_by(HostGroup.name).all()
+    custom_groups = CustomGroup.query.order_by(CustomGroup.is_system.desc(), CustomGroup.name).all()
+    dc_count = Host.query.filter_by(os_type="windows").filter(
+        (Host.custom_groups.any(CustomGroup.name == "Контроллеры домена")) |
+        (Host.name.ilike("%_dc%")) | (Host.name.ilike("%-dc%")) | (Host.name.ilike("%dc")) | (Host.name.ilike("dc-%"))
+    ).count()
     all_hosts_count = Host.query.filter_by(is_enabled=True).count()
     staff_members = StaffMember.query.filter_by(is_active=True).order_by(StaffMember.name).all()
     selected_staff_ids = request.args.getlist("staff_ids")
@@ -685,6 +904,8 @@ def user_ops_view():
     return render_template(
         "user_ops.html",
         groups=groups,
+        custom_groups=custom_groups,
+        dc_count=dc_count,
         all_hosts_count=all_hosts_count,
         selected_host_ids=selected_host_ids,
         selected_group_id=request.args.get("group_id", ""),
@@ -800,12 +1021,28 @@ def run_user_ops():
             return redirect(url_for("user_ops_view"))
         query = query.filter_by(group_id=int(group_id))
 
+    # Exclude Custom Groups if specified
+    exclude_custom_group_ids = request.form.getlist("exclude_custom_group_ids")
+    if exclude_custom_group_ids:
+        int_cids = [int(i) for i in exclude_custom_group_ids if str(i).isdigit()]
+        if int_cids:
+            query = query.filter(~Host.custom_groups.any(CustomGroup.id.in_(int_cids)))
+
     if target_os in ("linux", "windows"):
         query = query.filter_by(os_type=target_os)
 
     target_hosts = query.all()
+
+    # Safety Guard: Exclude Domain Controllers if requested
+    exclude_dc = request.form.get("exclude_dc") == "1"
+    excluded_dc_count = 0
+    if exclude_dc:
+        filtered = [h for h in target_hosts if not h.is_domain_controller]
+        excluded_dc_count = len(target_hosts) - len(filtered)
+        target_hosts = filtered
+
     if not target_hosts:
-        flash("Не найдено хостов, соответствующих критериям выборки.", "warning")
+        flash("Не найдено хостов, соответствующих критериям (или все хосты попали в исключения).", "warning")
         return redirect(url_for("user_ops_view"))
 
     host_ids = [h.id for h in target_hosts]
@@ -814,6 +1051,8 @@ def run_user_ops():
     usernames_preview = ", ".join([u["username"] for u in target_users[:3]])
     if len(target_users) > 3:
         usernames_preview += f" и еще {len(target_users) - 3}"
+
+    dc_note = f" (исключено {excluded_dc_count} DC)" if excluded_dc_count > 0 else ""
 
     if operation == "create":
         playbook_name = "user_create.yml"
@@ -824,7 +1063,7 @@ def run_user_ops():
             "target_password": target_users[0]["password"],
             "target_sudo": target_users[0]["sudo"]
         }
-        summary = f"Создание доступа для [{usernames_preview}] ({len(target_users)} чел.) на {len(host_ids)} серверах"
+        summary = f"Создание доступа для [{usernames_preview}] ({len(target_users)} чел.) на {len(host_ids)} серверах{dc_note}"
         task_type = "user_create"
     else:
         playbook_name = "user_delete.yml"
@@ -832,7 +1071,7 @@ def run_user_ops():
             "target_users": target_users,
             "target_username": target_users[0]["username"]
         }
-        summary = f"Отзыв доступа / удаление [{usernames_preview}] ({len(target_users)} чел.) с {len(host_ids)} серверов"
+        summary = f"Отзыв доступа / удаление [{usernames_preview}] ({len(target_users)} чел.) с {len(host_ids)} серверов{dc_note}"
         task_type = "user_delete"
 
     cred_profile_id = request.form.get("credential_profile_id")
@@ -1853,15 +2092,26 @@ def bootstrap_database():
             db.session.add(admin)
             print("[BOOTSTRAP] Created default admin user (admin / admin)")
 
-        # 2. Create Default Zabbix Setting if not exists
-        # 2. Create Default Zabbix Setting if not exists
-        if ZabbixSetting.query.count() == 0:
-            setting = ZabbixSetting(
-                url="http://zabbix-server/api_jsonrpc.php",
-                verify_ssl=False,
-                auto_sync=False
-            )
-            db.session.add(setting)
+        # 3. Ensure system CustomGroup 'Контроллеры домена' exists and auto-tag
+        try:
+            dc_group = CustomGroup.query.filter_by(name="Контроллеры домена").first()
+            if not dc_group:
+                dc_group = CustomGroup(
+                    name="Контроллеры домена",
+                    description="Active Directory Domain Controllers (исключаются из локальных сценариев)",
+                    color="red",
+                    is_system=True
+                )
+                db.session.add(dc_group)
+                db.session.commit()
+                print("[BOOTSTRAP] Created system group 'Контроллеры домена'.")
+            
+            tagged = auto_tag_domain_controllers()
+            if tagged > 0:
+                print(f"[BOOTSTRAP] Auto-tagged {tagged} Domain Controllers.")
+        except Exception as e:
+            db.session.rollback()
+            print(f"[BOOTSTRAP] CustomGroup init notice: {e}")
 
         db.session.commit()
 
