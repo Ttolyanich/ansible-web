@@ -1280,12 +1280,12 @@ def get_playbook_meta(filename: str):
         meta["icon_bg"] = "bg-red-500/10 text-red-400"
     elif fn == "win_disable_inactive_users.yml":
         meta["title"] = "Автоблокировка неактивных пользователей Windows"
-        meta["description"] = "Развертывание скрипта автоблокировки учеток (>45 дней неактивности), списка исключений и задачи в планировщике Windows."
+        meta["description"] = "Развертывание универсального скрипта автоблокировки учеток (>2 месяцев неактивности, DC и локальные), списка исключений и задачи в планировщике Windows."
         meta["icon"] = "fa-solid fa-user-lock"
         meta["icon_bg"] = "bg-violet-500/10 text-violet-400"
     elif fn == "win_audit_inactive_users.yml":
         meta["title"] = "Аудит автоблокировки пользователей Windows"
-        meta["description"] = "Проверка статуса задачи планировщика, времени запуска и логов автоблокировки на серверах."
+        meta["description"] = "Проверка статуса задачи планировщика, режима работы (DC/Member Server), времени запуска и логов автоблокировки на серверах."
         meta["icon"] = "fa-solid fa-clipboard-check"
         meta["icon_bg"] = "bg-amber-500/10 text-amber-400"
     elif "system_update" in fn:
