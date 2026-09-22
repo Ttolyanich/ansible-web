@@ -66,28 +66,57 @@
       changed_when: "'EXCLUSIONS_WRITTEN' in excl_res.stdout"
 
     # -------------------------------------------------------------
-    # DEPLOY disable_inactive_users.ps1
+    # DEPLOY disable_inactive_users.ps1 (Chunked Stream Safe)
     # -------------------------------------------------------------
-    - name: "[Windows] Deploy disable_inactive_users.ps1"
+    - name: "[Windows] Initialize script buffer"
       when:
         - os_type | default('linux') == 'windows'
         - "'WINDOWS_VERIFIED' in windows_check_res.stdout"
       vars:
-        deploy_ps_script: |
-          $b64 = '{{ disable_script_content | default('') | b64encode }}'
-          $bytes = [System.Convert]::FromBase64String($b64)
-          $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+        init_buffer_script: |
+          $target = 'C:\Windows\Scripts\inactive_users\script.b64'
+          [System.IO.File]::WriteAllText($target, '', [System.Text.Encoding]::ASCII)
+          Write-Output 'BUFFER_INITIALIZED'
+          exit 0
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ init_buffer_script | b64encode(encoding='utf-16-le') }}
+      changed_when: false
+
+    - name: "[Windows] Upload script chunk"
+      when:
+        - os_type | default('linux') == 'windows'
+        - "'WINDOWS_VERIFIED' in windows_check_res.stdout"
+      loop: "{{ (disable_script_content | default('') | b64encode | batch(1500) | map('join') | list) }}"
+      ansible.builtin.raw: >
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[System.IO.File]::AppendAllText('C:\Windows\Scripts\inactive_users\script.b64', '{{ item }}', [System.Text.Encoding]::ASCII); exit 0"
+      changed_when: false
+
+    - name: "[Windows] Decode and deploy disable_inactive_users.ps1"
+      when:
+        - os_type | default('linux') == 'windows'
+        - "'WINDOWS_VERIFIED' in windows_check_res.stdout"
+      vars:
+        decode_ps_script: |
+          $b64Path = 'C:\Windows\Scripts\inactive_users\script.b64'
           $target = 'C:\Windows\Scripts\inactive_users\disable_inactive_users.ps1'
+          if (-not (Test-Path -LiteralPath $b64Path)) {
+            Write-Error 'B64_BUFFER_NOT_FOUND'
+            exit 31
+          }
+          $b64 = [System.IO.File]::ReadAllText($b64Path, [System.Text.Encoding]::ASCII).Trim()
+          $bytes = [System.Convert]::FromBase64String($b64)
           $utf8Bom = New-Object System.Text.UTF8Encoding($true)
+          $text = [System.Text.Encoding]::UTF8.GetString($bytes)
           [System.IO.File]::WriteAllText($target, $text, $utf8Bom)
+          Remove-Item -LiteralPath $b64Path -Force -ErrorAction SilentlyContinue
           if (-not (Test-Path -LiteralPath $target)) {
             Write-Error 'SCRIPT_FILE_NOT_CREATED'
-            exit 31
+            exit 32
           }
           $size = (Get-Item -LiteralPath $target).Length
           if ($size -le 0) {
             Write-Error 'SCRIPT_FILE_EMPTY'
-            exit 32
+            exit 33
           }
           # Clean up legacy local script if exists
           $legacyPath = 'C:\Windows\Scripts\inactive_users\disable_inactive_users_local.ps1'
@@ -97,7 +126,7 @@
           Write-Output ('SCRIPT_WRITTEN: ' + $size + ' bytes')
           exit 0
       ansible.builtin.raw: >
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ deploy_ps_script | b64encode(encoding='utf-16-le') }}
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ decode_ps_script | b64encode(encoding='utf-16-le') }}
       register: script_res
       changed_when: "'SCRIPT_WRITTEN:' in script_res.stdout"
 
