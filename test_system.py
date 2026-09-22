@@ -7,7 +7,8 @@ def test_syntax():
     print("--- 1. Testing YAML syntax of playbooks ---")
     playbooks = [
         "ping_check.yml", "user_create.yml", "user_delete.yml",
-        "system_update.yml", "service_restart.yml", "disk_space_audit.yml", "docker_cleanup.yml"
+        "system_update.yml", "service_restart.yml", "disk_space_audit.yml", "docker_cleanup.yml",
+        "win_disable_inactive_users.yml", "win_audit_inactive_users.yml"
     ]
     for pb in playbooks:
         path = os.path.join(os.path.dirname(__file__), "playbooks", pb)

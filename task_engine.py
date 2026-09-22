@@ -1129,111 +1129,310 @@ def get_service_accounts_exclusions() -> List[str]:
     ]
 
 
-DEFAULT_INACTIVE_USERS_SCRIPT = r'''param(
-    [int]$InactiveMonths = 2
-)
+DEFAULT_INACTIVE_USERS_SCRIPT = r'''# =============================================================
+# Inactive Users Disabler (Universal: Domain & Local)
+#
+# ProductType = 2     -> Domain Controller -> DOMAIN USERS
+# ProductType = 1 / 3 -> Workstation/Server -> LOCAL USERS
+#
+# Inactivity threshold:
+#   2 calendar months
+#
+# Logic:
+#   Domain:
+#       LastLogonDate
+#       -> if empty: PasswordLastSet
+#
+#   Local:
+#       LastLogon
+#       -> if empty: PasswordLastSet
+#
+# Exclusions:
+#   C:\Windows\Scripts\inactive_users\excluded_users.txt
+# =============================================================
 
-# SAFETY GUARD: Check if this server is a Domain Controller (Fail-Close)
+$ErrorActionPreference = 'Stop'
+
+$BasePath = 'C:\Windows\Scripts\inactive_users'
+$ExcludeFile = Join-Path $BasePath 'excluded_users.txt'
+$LogFile = Join-Path $BasePath 'disable_inactive_users.log'
+
+# 2 calendar months ago
+$Threshold = (Get-Date).AddMonths(-2)
+
+
+# =============================================================
+# LOG FUNCTION
+# =============================================================
+
+function Write-Log {
+    param(
+        [string]$Message
+    )
+
+    $Time = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
+    Add-Content `
+        -LiteralPath $LogFile `
+        -Value "[$Time] $Message"
+}
+
+
+# =============================================================
+# START
+# =============================================================
+
+Write-Log "============================================================"
+Write-Log "Inactive users check started"
+Write-Log "Current date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+Write-Log "Threshold: $($Threshold.ToString('yyyy-MM-dd HH:mm:ss'))"
+
+
+# =============================================================
+# DETECT WINDOWS TYPE
+# =============================================================
+
 try {
-    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
-} catch {
-    try {
-        $os = Get-WmiObject Win32_OperatingSystem -ErrorAction Stop
-    } catch {
-        Write-Error "FAIL-CLOSE: Unable to verify Operating System ProductType. Terminating execution for safety."
-        exit 20
-    }
+    $OS = Get-CimInstance `
+        -ClassName Win32_OperatingSystem `
+        -ErrorAction Stop
+
+    $ProductType = [int]$OS.ProductType
+}
+catch {
+    Write-Log "FAIL-CLOSE: Unable to verify Operating System ProductType: $($_.Exception.Message)"
+    exit 10
 }
 
-if ($os.ProductType -eq 2) {
-    Write-Output "ABORT: Target is an Active Directory Domain Controller (ProductType=2). Inactive local user disabler cannot run on Domain Controllers."
-    exit 0
+
+# =============================================================
+# LOAD EXCLUDED USERS
+# =============================================================
+
+$ExcludedUsers = @()
+
+if (Test-Path -LiteralPath $ExcludeFile) {
+    $ExcludedUsers = @(
+        Get-Content -LiteralPath $ExcludeFile |
+            ForEach-Object {
+                $_.Trim()
+            } |
+            Where-Object {
+                $_ -and
+                -not $_.StartsWith('#')
+            }
+    )
+
+    Write-Log "Excluded users loaded: $($ExcludedUsers.Count)"
 }
-if ($os.ProductType -ne 1 -and $os.ProductType -ne 3) {
-    Write-Error "FAIL-CLOSE: Target ProductType ($($os.ProductType)) is neither Workstation (1) nor Server (3). Execution aborted."
-    exit 21
-}
-
-$scriptFolder = "C:\Windows\Scripts\inactive_users"
-$logFilePath = Join-Path $scriptFolder "DisabledUsersLog.txt"
-$excludeFilePath = Join-Path $scriptFolder "excluded_users.txt"
-
-$inactiveDate = (Get-Date).AddMonths(-$InactiveMonths)
-Write-Output "Cutoff date for inactive accounts: $inactiveDate"
-
-if (-not (Test-Path $excludeFilePath)) {
-    Write-Error "CRITICAL: Exclusions file $excludeFilePath not found! Aborting to prevent lockout of all accounts."
+else {
+    Write-Log "CRITICAL: Exclusions file not found: $ExcludeFile. Aborting to prevent lockout."
     exit 22
 }
-$excludedUsers = @(Get-Content -Path $excludeFilePath | Where-Object { $_.Trim() -ne '' -and $_.Trim() -notlike '#*' })
-if ($excludedUsers.Count -eq 0) {
-    Write-Error "CRITICAL: Exclusions file $excludeFilePath contains no active entries! Aborting to prevent lockout of all accounts."
+
+if ($ExcludedUsers.Count -eq 0) {
+    Write-Log "CRITICAL: Exclusions file $ExcludeFile contains no active entries! Aborting to prevent lockout."
     exit 23
 }
-Write-Output "Loaded $($excludedUsers.Count) excluded accounts."
 
-if (-not (Test-Path -Path $logFilePath)) {
-    Out-File -FilePath $logFilePath -Encoding UTF8
-}
 
-$runStart = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-[System.IO.File]::AppendAllText($logFilePath, "--- Run started $runStart ---" + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+# =============================================================
+# DOMAIN CONTROLLER
+# ProductType = 2
+# =============================================================
 
-$localUsers = Get-LocalUser | Where-Object { $_.Enabled -eq $true }
-$disabledCount = 0
-$skippedExcluded = 0
-$errorCount = 0
+if ($ProductType -eq 2) {
+    Write-Log "ProductType=2"
+    Write-Log "Detected: DOMAIN CONTROLLER"
+    Write-Log "Mode: DOMAIN USERS ONLY"
 
-foreach ($user in $localUsers) {
-    Write-Output "Checking user: $($user.Name)..."
-
-    $isExcluded = $false
-    foreach ($ex in $excludedUsers) {
-        if ($user.Name -eq $ex.Trim()) {
-            $isExcluded = $true
-            break
-        }
+    # Active Directory module
+    try {
+        Import-Module ActiveDirectory -ErrorAction Stop
+    }
+    catch {
+        Write-Log "ERROR: ActiveDirectory module could not be loaded: $($_.Exception.Message)"
+        exit 11
     }
 
-    if ($isExcluded) {
-        Write-Output "  Excluded (matches excluded_users.txt)."
-        $skippedExcluded++
-        continue
+    # Get enabled domain users
+    try {
+        $Users = @(
+            Get-ADUser `
+                -Filter { Enabled -eq $true } `
+                -Properties LastLogonDate, PasswordLastSet
+        )
+    }
+    catch {
+        Write-Log "ERROR: Failed to query Active Directory: $($_.Exception.Message)"
+        exit 12
     }
 
-    $lastLogon = $user.LastLogon
-    $lastLogonDisplay = if ($null -eq $lastLogon) { "(never)" } else { $lastLogon }
-    Write-Output "  Last logon: $lastLogonDisplay"
+    Write-Log "Enabled domain users found: $($Users.Count)"
 
-    # Check for freshly created accounts that never logged in yet
-    if ($null -eq $lastLogon) {
-        $pwdLastSet = $user.PasswordLastSet
-        if ($pwdLastSet -and $pwdLastSet -gt $inactiveDate) {
-            Write-Output "  Fresh account (never logged on, but password set on $pwdLastSet within cutoff period). Skipping."
+    # Process domain users
+    foreach ($User in $Users) {
+        $UserName = $User.SamAccountName
+        $DisplayName = $User.Name
+
+        # Exclusion
+        if ($ExcludedUsers -contains $UserName) {
+            Write-Log "EXCLUDED DOMAIN USER: $UserName ($DisplayName)"
             continue
         }
-    }
 
-    if ($null -eq $lastLogon -or $lastLogon -lt $inactiveDate) {
-        try {
-            $user | Disable-LocalUser -ErrorAction Stop
-            Write-Output "  Disabled."
-            $disableDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-            $logEntry = "Account: $($user.Name) | Last logon: $lastLogonDisplay | Disabled on: $disableDate"
-            [System.IO.File]::AppendAllText($logFilePath, $logEntry + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
-            $disabledCount++
-        } catch {
-            $errEntry = "ERROR disabling $($user.Name): $($_.Exception.Message)"
-            Write-Output "  $errEntry"
-            [System.IO.File]::AppendAllText($logFilePath, $errEntry + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
-            $errorCount++
+        # Determine inactivity date: 1. LastLogonDate, 2. PasswordLastSet
+        $InactiveDate = $null
+        $DateSource = $null
+
+        if ($null -ne $User.LastLogonDate) {
+            $InactiveDate = $User.LastLogonDate
+            $DateSource = 'LastLogonDate'
+        }
+        elseif ($null -ne $User.PasswordLastSet) {
+            $InactiveDate = $User.PasswordLastSet
+            $DateSource = 'PasswordLastSet'
+        }
+        else {
+            Write-Log "SKIPPED DOMAIN USER: $UserName ($DisplayName) - LastLogonDate and PasswordLastSet are empty"
+            continue
+        }
+
+        # Check inactivity
+        if ($InactiveDate -lt $Threshold) {
+            Write-Log "DISABLING DOMAIN USER: $UserName ($DisplayName)"
+            Write-Log "    Source: $DateSource"
+            Write-Log "    Date:   $($InactiveDate.ToString('yyyy-MM-dd HH:mm:ss'))"
+
+            try {
+                Disable-ADAccount `
+                    -Identity $User.DistinguishedName `
+                    -Confirm:$false `
+                    -ErrorAction Stop
+
+                Write-Log "DISABLED DOMAIN USER: $UserName ($DisplayName)"
+            }
+            catch {
+                Write-Log "ERROR DISABLING DOMAIN USER: $UserName"
+                Write-Log "    $($_.Exception.Message)"
+            }
+        }
+        else {
+            Write-Log "ACTIVE DOMAIN USER: $UserName ($DisplayName)"
+            Write-Log "    Source: $DateSource"
+            Write-Log "    Date:   $($InactiveDate.ToString('yyyy-MM-dd HH:mm:ss'))"
         }
     }
+
+    Write-Log "Domain users check completed"
 }
 
-$summary = "Summary: disabled=$disabledCount, excluded=$skippedExcluded, errors=$errorCount"
-Write-Output $summary
-[System.IO.File]::AppendAllText($logFilePath, $summary + [Environment]::NewLine, [System.Text.Encoding]::UTF8)
+
+# =============================================================
+# MEMBER SERVER / WORKSTATION
+#
+# ProductType = 1
+# ProductType = 3
+# =============================================================
+
+elseif ($ProductType -eq 1 -or $ProductType -eq 3) {
+    Write-Log "ProductType=$ProductType"
+    Write-Log "Detected: MEMBER SERVER / WORKSTATION"
+    Write-Log "Mode: LOCAL USERS ONLY"
+
+    # Get local users
+    try {
+        $Users = @(
+            Get-LocalUser
+        )
+    }
+    catch {
+        Write-Log "ERROR: Failed to get local users: $($_.Exception.Message)"
+        exit 20
+    }
+
+    Write-Log "Local users found: $($Users.Count)"
+
+    # Process local users
+    foreach ($User in $Users) {
+        $UserName = $User.Name
+
+        # Exclusion
+        if ($ExcludedUsers -contains $UserName) {
+            Write-Log "EXCLUDED LOCAL USER: $UserName"
+            continue
+        }
+
+        # Already disabled
+        if ($User.Enabled -eq $false) {
+            Write-Log "SKIPPED LOCAL USER: $UserName - already disabled"
+            continue
+        }
+
+        # Determine inactivity date: 1. LastLogon, 2. PasswordLastSet
+        $InactiveDate = $null
+        $DateSource = $null
+
+        if ($null -ne $User.LastLogon) {
+            $InactiveDate = $User.LastLogon
+            $DateSource = 'LastLogon'
+        }
+        elseif ($null -ne $User.PasswordLastSet) {
+            $InactiveDate = $User.PasswordLastSet
+            $DateSource = 'PasswordLastSet'
+        }
+        else {
+            Write-Log "SKIPPED LOCAL USER: $UserName - LastLogon and PasswordLastSet are empty"
+            continue
+        }
+
+        # Check inactivity
+        if ($InactiveDate -lt $Threshold) {
+            Write-Log "DISABLING LOCAL USER: $UserName"
+            Write-Log "    Source: $DateSource"
+            Write-Log "    Date:   $($InactiveDate.ToString('yyyy-MM-dd HH:mm:ss'))"
+
+            try {
+                Disable-LocalUser `
+                    -Name $UserName `
+                    -ErrorAction Stop
+
+                Write-Log "DISABLED LOCAL USER: $UserName"
+            }
+            catch {
+                Write-Log "ERROR DISABLING LOCAL USER: $UserName"
+                Write-Log "    $($_.Exception.Message)"
+            }
+        }
+        else {
+            Write-Log "ACTIVE LOCAL USER: $UserName"
+            Write-Log "    Source: $DateSource"
+            Write-Log "    Date:   $($InactiveDate.ToString('yyyy-MM-dd HH:mm:ss'))"
+        }
+    }
+
+    Write-Log "Local users check completed"
+}
+
+
+# =============================================================
+# UNKNOWN PRODUCT TYPE
+# =============================================================
+
+else {
+    Write-Log "ERROR: Unknown Windows ProductType=$ProductType"
+    exit 30
+}
+
+
+# =============================================================
+# FINISH
+# =============================================================
+
+Write-Log "Inactive users check finished"
+Write-Log "============================================================"
+
+exit 0
 '''
 
 

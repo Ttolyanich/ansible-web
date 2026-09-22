@@ -9,7 +9,7 @@
       vars:
         audit_script: |
           $res = @{
-            IsDC = $false
+            Mode = 'Unknown'
             DirExists = $false
             ExclusionsCount = 0
             ScriptExists = $false
@@ -23,12 +23,15 @@
           try {
             $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
             if (-not $os) { $os = Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue }
-            if ($os.ProductType -eq 2) { $res.IsDC = $true }
-          } catch {}
-
-          if ($res.IsDC) {
-            Write-Output 'AUDIT: Target is an Active Directory Domain Controller (ProductType=2). Inactive users disabler should NOT be deployed here.'
-            exit 0
+            if ($os.ProductType -eq 2) {
+              $res.Mode = 'DomainController'
+            } elseif ($os.ProductType -eq 1 -or $os.ProductType -eq 3) {
+              $res.Mode = 'MemberServer'
+            } else {
+              $res.Mode = "ProductType_$($os.ProductType)"
+            }
+          } catch {
+            $res.Mode = 'DetectFailed'
           }
 
           $dir = 'C:\Windows\Scripts\inactive_users'
@@ -43,30 +46,34 @@
             $res.ExclusionsCount = $valid
           }
 
-          $scriptPath = Join-Path $dir 'disable_inactive_users_local.ps1'
-          $res.ScriptExists = Test-Path $scriptPath
+          $scriptPath = Join-Path $dir 'disable_inactive_users.ps1'
+          $legacyScriptPath = Join-Path $dir 'disable_inactive_users_local.ps1'
+          $res.ScriptExists = (Test-Path $scriptPath) -or (Test-Path $legacyScriptPath)
 
-          try {
-            $t = Get-ScheduledTask -TaskName 'Disable Inactive Local Users' -ErrorAction Stop
-            $res.TaskInstalled = $true
-            $res.TaskState = [string]$t.State
-            $info = Get-ScheduledTaskInfo -TaskName 'Disable Inactive Local Users' -ErrorAction SilentlyContinue
-            if ($info) {
-              $res.LastRun = [string]$info.LastRunTime
-              $res.NextRun = [string]$info.NextRunTime
-            }
-          } catch {
-            $res.TaskInstalled = $false
-            $res.TaskState = 'NotInstalled'
+          $taskNames = @('Disable Inactive Users', 'Disable Inactive Local Users')
+          foreach ($tn in $taskNames) {
+            try {
+              $t = Get-ScheduledTask -TaskName $tn -ErrorAction Stop
+              $res.TaskInstalled = $true
+              $res.TaskState = [string]$t.State
+              $info = Get-ScheduledTaskInfo -TaskName $tn -ErrorAction SilentlyContinue
+              if ($info) {
+                $res.LastRun = [string]$info.LastRunTime
+                $res.NextRun = [string]$info.NextRunTime
+              }
+              break
+            } catch {}
           }
 
-          $logPath = Join-Path $dir 'DisabledUsersLog.txt'
-          if (Test-Path $logPath) {
-            $lastLines = Get-Content $logPath -Tail 3 -ErrorAction SilentlyContinue
+          $logPath = Join-Path $dir 'disable_inactive_users.log'
+          $legacyLogPath = Join-Path $dir 'DisabledUsersLog.txt'
+          $actualLog = if (Test-Path $logPath) { $logPath } elseif (Test-Path $legacyLogPath) { $legacyLogPath } else { $null }
+          if ($actualLog) {
+            $lastLines = Get-Content $actualLog -Tail 3 -ErrorAction SilentlyContinue
             if ($lastLines) { $res.LastLogSummary = ($lastLines -join ' | ') }
           }
 
-          Write-Output ('AUDIT_RESULT: Task=' + $res.TaskState + ' | Exclusions=' + $res.ExclusionsCount + ' | Script=' + $res.ScriptExists + ' | NextRun=' + $res.NextRun + ' | LastRun=' + $res.LastRun + ' | LastLog=[' + $res.LastLogSummary + ']')
+          Write-Output ('AUDIT_RESULT: Mode=' + $res.Mode + ' | Task=' + $res.TaskState + ' | Exclusions=' + $res.ExclusionsCount + ' | Script=' + $res.ScriptExists + ' | NextRun=' + $res.NextRun + ' | LastRun=' + $res.LastRun + ' | LastLog=[' + $res.LastLogSummary + ']')
           exit 0
       ansible.builtin.raw: >
         powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ audit_script | b64encode(encoding='utf-16-le') }}
