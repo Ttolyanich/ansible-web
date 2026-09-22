@@ -1238,9 +1238,12 @@ def get_playbook_meta(filename: str):
     try:
         st = os.stat(playbook_path)
         meta["size_kb"] = round(st.st_size / 1024.0, 1)
+        meta["mtime"] = st.st_mtime
         meta["modified_str"] = datetime.fromtimestamp(st.st_mtime).strftime("%d.%m.%Y %H:%M")
+        meta["is_recent"] = (datetime.now().timestamp() - st.st_mtime) < 86400
     except Exception:
-        pass
+        meta["mtime"] = 0
+        meta["is_recent"] = False
 
     try:
         with open(playbook_path, "r", encoding="utf-8") as f:
@@ -1322,8 +1325,13 @@ def playbooks_view():
         f for f in os.listdir(PLAYBOOKS_DIR) 
         if (f.endswith(".yml") or f.endswith(".yaml")) and os.path.isfile(os.path.join(PLAYBOOKS_DIR, f))
     ]
-    all_files.sort(key=lambda name: (0 if name in SYSTEM_PLAYBOOKS else 1, name.lower()))
     playbooks = [get_playbook_meta(f) for f in all_files]
+    # System playbooks first, then custom playbooks sorted by newest modified first
+    playbooks.sort(key=lambda pb: (
+        0 if pb["is_system"] else 1,
+        -pb.get("mtime", 0) if not pb["is_system"] else 0,
+        pb["filename"].lower()
+    ))
     return render_template("playbooks.html", playbooks=playbooks)
 
 

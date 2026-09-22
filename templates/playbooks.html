@@ -57,24 +57,60 @@
         </div>
     </div>
 
+    <!-- Search & Filter Controls -->
+    <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 p-3 rounded-xl shadow-sm">
+        <!-- Filter Tabs -->
+        <div class="flex items-center gap-1.5 p-1 bg-slate-950/80 border border-slate-800 rounded-lg text-xs font-semibold">
+            <button type="button" onclick="filterPlaybooks('all')" id="btn-filter-all" class="filter-btn px-3 py-1.5 rounded-md bg-red-600 text-white shadow-sm transition">
+                Все ({{ playbooks|length }})
+            </button>
+            <button type="button" onclick="filterPlaybooks('system')" id="btn-filter-system" class="filter-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition">
+                Системные ({{ playbooks|selectattr('is_system')|list|length }})
+            </button>
+            <button type="button" onclick="filterPlaybooks('custom')" id="btn-filter-custom" class="filter-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition">
+                Пользовательские ({{ playbooks|rejectattr('is_system')|list|length }})
+            </button>
+        </div>
+
+        <!-- Search Input -->
+        <div class="relative flex-1 sm:max-w-xs">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs pointer-events-none"></i>
+            <input type="text" id="playbook-search" oninput="searchPlaybooks()" placeholder="Поиск по файлу или названию..." class="w-full pl-8 pr-8 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-red-500 transition">
+            <button type="button" id="clear-search" onclick="clearPlaybookSearch()" class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+    </div>
+
     <!-- Playbooks Grid / Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+    <div id="playbooks-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {% for pb in playbooks %}
-        <div class="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-5 flex flex-col justify-between transition group shadow-sm">
+        <div class="playbook-card bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-5 flex flex-col justify-between transition group shadow-sm"
+             data-is-system="{{ 'true' if pb.is_system else 'false' }}"
+             data-search="{{ pb.title|lower }} {{ pb.filename|lower }} {{ (pb.description or '')|lower }}">
             <div>
-                <!-- Card Header: Icon + Title + System Badge -->
+                <!-- Card Header: Icon + Title + Badges -->
                 <div class="flex items-start justify-between gap-3 mb-3">
                     <div class="flex items-center gap-3 min-w-0">
                         <div class="w-10 h-10 rounded-lg {{ pb.icon_bg or 'bg-slate-800 text-slate-300' }} border border-slate-700/60 flex items-center justify-center text-base shrink-0">
                             <i class="{{ pb.icon or 'fa-solid fa-file-code' }}"></i>
                         </div>
                         <div class="min-w-0">
-                            <h3 class="text-sm font-bold text-white group-hover:text-red-400 transition truncate" title="{{ pb.title }}">
-                                {{ pb.title }}
-                            </h3>
-                            <div class="text-[11px] font-mono text-slate-400 truncate flex items-center gap-1.5 mt-0.5">
-                                <i class="fa-solid fa-file-lines text-[10px]"></i>
-                                <span>{{ pb.filename }}</span>
+                            <div class="flex items-center gap-1.5 flex-wrap">
+                                <h3 class="text-sm font-bold text-white group-hover:text-red-400 transition truncate" title="{{ pb.title }}">
+                                    {{ pb.title }}
+                                </h3>
+                                {% if pb.is_recent and not pb.is_system %}
+                                <span class="px-1.5 py-0.2 rounded text-[9px] uppercase font-bold tracking-wider bg-emerald-950 text-emerald-300 border border-emerald-800 shrink-0">
+                                    Новый
+                                </span>
+                                {% endif %}
+                            </div>
+                            <div class="text-[11px] font-mono text-slate-300 truncate flex items-center gap-1.5 mt-1">
+                                <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700 font-semibold text-[11px] select-all flex items-center gap-1">
+                                    <i class="fa-solid fa-file-lines text-[9px] text-slate-400"></i>
+                                    {{ pb.filename }}
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -144,5 +180,69 @@
         </div>
         {% endfor %}
     </div>
+
+    <!-- Empty Search Results State -->
+    <div id="playbooks-empty-search" class="hidden bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400">
+        <i class="fa-solid fa-folder-open text-3xl mb-3 text-slate-600"></i>
+        <div class="text-sm font-semibold text-white">Плейбуки не найдены</div>
+        <p class="text-xs text-slate-500 mt-1">Попробуйте изменить поисковый запрос или переключить фильтр.</p>
+    </div>
 </div>
+
+<script>
+    let currentFilter = 'all';
+
+    function filterPlaybooks(type) {
+        currentFilter = type;
+        document.querySelectorAll('.filter-btn').forEach(b => {
+            b.className = 'filter-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition';
+        });
+        const activeBtn = document.getElementById('btn-filter-' + type);
+        if (activeBtn) {
+            activeBtn.className = 'filter-btn px-3 py-1.5 rounded-md bg-red-600 text-white shadow-sm font-semibold transition';
+        }
+        applyPlaybookFilters();
+    }
+
+    function searchPlaybooks() {
+        const q = document.getElementById('playbook-search').value.trim();
+        document.getElementById('clear-search').classList.toggle('hidden', !q);
+        applyPlaybookFilters();
+    }
+
+    function clearPlaybookSearch() {
+        document.getElementById('playbook-search').value = '';
+        document.getElementById('clear-search').classList.add('hidden');
+        applyPlaybookFilters();
+    }
+
+    function applyPlaybookFilters() {
+        const q = (document.getElementById('playbook-search').value || '').toLowerCase().trim();
+        const cards = document.querySelectorAll('.playbook-card');
+        let visibleCount = 0;
+
+        cards.forEach(card => {
+            const isSystem = card.getAttribute('data-is-system') === 'true';
+            const searchData = (card.getAttribute('data-search') || '').toLowerCase();
+
+            let matchesFilter = true;
+            if (currentFilter === 'system') matchesFilter = isSystem;
+            if (currentFilter === 'custom') matchesFilter = !isSystem;
+
+            let matchesSearch = !q || searchData.includes(q);
+
+            if (matchesFilter && matchesSearch) {
+                card.classList.remove('hidden');
+                visibleCount++;
+            } else {
+                card.classList.add('hidden');
+            }
+        });
+
+        const emptyState = document.getElementById('playbooks-empty-search');
+        if (emptyState) {
+            emptyState.classList.toggle('hidden', visibleCount > 0);
+        }
+    }
+</script>
 {% endblock %}

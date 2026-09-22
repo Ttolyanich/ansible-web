@@ -111,7 +111,7 @@
         - os_type | default('linux') == 'windows'
         - "'MEMBER_SERVER_OR_WORKSTATION_VERIFIED' in dc_check_res.stdout"
       ansible.builtin.raw: >
-        schtasks.exe /Create /F /TN "Disable Inactive Local Users" /RU "NT AUTHORITY\SYSTEM" /RL HIGHEST /SC DAILY /ST 00:00 /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\Windows\Scripts\inactive_users\disable_inactive_users_local.ps1\""
+        schtasks.exe /Create /F /TN "Disable Inactive Local Users" /RU "NT AUTHORITY\SYSTEM" /RL HIGHEST /SC DAILY /ST 00:00 /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Windows\Scripts\inactive_users\disable_inactive_users_local.ps1"
       register: task_reg_res
       changed_when: "'SUCCESS' in task_reg_res.stdout or 'успешно' in task_reg_res.stdout | lower"
 
