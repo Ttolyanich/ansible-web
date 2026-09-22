@@ -221,3 +221,10 @@
         powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ query_task_script | b64encode(encoding='utf-16-le') }}
       register: task_status_res
       changed_when: false
+
+    - name: "[Windows] Scheduled Task Summary"
+      when:
+        - os_type | default('linux') == 'windows'
+        - task_status_res is defined
+      ansible.builtin.debug:
+        msg: "{{ task_status_res.stdout_lines | default([]) }}"

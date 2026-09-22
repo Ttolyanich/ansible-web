@@ -79,3 +79,10 @@
         powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {{ audit_script | b64encode(encoding='utf-16-le') }}
       register: audit_res
       changed_when: false
+
+    - name: "[Windows Audit] Audit Summary"
+      when:
+        - os_type | default('linux') == 'windows'
+        - audit_res is defined
+      ansible.builtin.debug:
+        msg: "{{ audit_res.stdout_lines | default([]) }}"
