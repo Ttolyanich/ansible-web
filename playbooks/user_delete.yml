@@ -25,7 +25,7 @@
     # -------------------------------------------------------------
     - name: "[Linux / Safety Guard] Terminate user processes (UID >= 1000 only)"
       when: os_type | default('linux') == 'linux'
-      ansible.builtin.raw: >
+      ansible.builtin.raw: |
         sh -c '
         TARGET_USER="{{ item.username }}";
         TARGET_UID=$(id -u "$TARGET_USER" 2>/dev/null || true);
@@ -55,15 +55,15 @@
       when:
         - os_type | default('linux') == 'linux'
         - not is_permanent_delete
-      ansible.builtin.raw: >
+      ansible.builtin.raw: |
         sh -c '
         U="{{ item.username }}";
         if ! id "$U" >/dev/null 2>&1; then
           echo "USER_ALREADY_ABSENT";
           exit 0;
         fi;
-        (usermod -L -e 1 "$U" 2>/dev/null || passwd -l "$U" 2>/dev/null) && \
-        (usermod -s /sbin/nologin "$U" 2>/dev/null || usermod -s /usr/sbin/nologin "$U" 2>/dev/null || true) && \
+        (usermod -L -e 1 "$U" 2>/dev/null || passwd -l "$U" 2>/dev/null || true);
+        (usermod -s /sbin/nologin "$U" 2>/dev/null || usermod -s /usr/sbin/nologin "$U" 2>/dev/null || true);
         (usermod -G "" "$U" 2>/dev/null || true);
         for g in sudo wheel admin docker adm lxd; do
           gpasswd -d "$U" "$g" 2>/dev/null || true;
@@ -83,14 +83,14 @@
       when:
         - os_type | default('linux') == 'linux'
         - is_permanent_delete
-      ansible.builtin.raw: >
+      ansible.builtin.raw: |
         sh -c '
         U="{{ item.username }}";
         if ! id "$U" >/dev/null 2>&1; then
           echo "USER_ALREADY_DELETED";
           exit 0;
         fi;
-        (userdel -r "$U" 2>/dev/null || deluser --remove-home "$U" 2>/dev/null || userdel "$U" 2>/dev/null) && \
+        (userdel -r "$U" 2>/dev/null || deluser --remove-home "$U" 2>/dev/null || userdel "$U" 2>/dev/null || true);
         (rm -rf "/home/$U" 2>/dev/null || true);
         echo "DELETE_SUCCESS"
         '
