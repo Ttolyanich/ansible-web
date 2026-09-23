@@ -708,12 +708,18 @@ def parse_ansible_recap(output: str) -> Dict[str, Dict[str, Any]]:
         if "PLAY RECAP" in line:
             in_recap = True
             continue
-        if in_recap and line.strip():
+        if in_recap:
+            line_str = line.strip()
+            if not line_str or line_str.startswith("===") or line_str.startswith("TASK [") or line_str.startswith("PLAY [") or line_str.startswith("["):
+                in_recap = False
+                continue
             # Example: srv-db01 : ok=2 changed=1 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0
-            parts = line.split(":")
-            if len(parts) >= 2:
-                hostname = parts[0].strip()
+            if ":" in line_str:
+                parts = line_str.split(":", 1)
                 stats_str = parts[1].strip()
+                if "ok=" not in stats_str:
+                    continue
+                hostname = parts[0].strip()
                 stats = {}
                 for item in stats_str.split():
                     if "=" in item:
@@ -1071,25 +1077,27 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                     h.last_checked_at = now
                     h.last_error = res.get("error") or res.get("summary")
 
+        # Check if task was canceled before setting final state
+        try:
+            db.session.refresh(task)
+        except Exception:
+            pass
+
+        is_canceled = (task.status == "canceled")
+
         task.success_count = success_count
         task.failed_count = failed_count
         task.details_json = json.dumps(final_results, ensure_ascii=False)
         task.log_output = "".join(aggregated_logs)
         task.finished_at = now
 
-        try:
-            db.session.refresh(task)
-        except Exception:
-            pass
-
-        if task.status == "canceled":
-            pass
-        elif failed_count == 0:
-            task.status = "success"
-        elif success_count == 0:
-            task.status = "failed"
-        else:
-            task.status = "partial"
+        if not is_canceled:
+            if failed_count == 0:
+                task.status = "success"
+            elif success_count == 0:
+                task.status = "failed"
+            else:
+                task.status = "partial"
 
         try:
             db.session.commit()

@@ -1771,12 +1771,12 @@ def get_failed_hosts_for_task(task):
 
     if not failed_names and task.log_output:
         for line in task.log_output.splitlines():
-            m = re.match(r'^\s*([^\s:]+)\s*:\s*.*(?:unreachable=[1-9]|failed=[1-9])', line)
+            m = re.match(r'^\s*(.+?)\s*:\s*.*(?:unreachable=[1-9]|failed=[1-9])', line)
             if m:
-                failed_names.add(m.group(1))
+                failed_names.add(m.group(1).strip())
             m_fatal = re.search(r'(?:fatal|unreachable):\s*\[([^\]]+)\]', line)
             if m_fatal:
-                failed_names.add(m_fatal.group(1))
+                failed_names.add(m_fatal.group(1).strip())
 
     if not failed_names:
         return []
@@ -1806,20 +1806,28 @@ def task_retry_failed(task_id):
     except Exception:
         pass
 
-    if meta_parsed.get("playbook_name"):
-        playbook_name = meta_parsed["playbook_name"]
-        extra_vars = meta_parsed.get("extra_vars", {})
-    elif task_type == "user_create":
+    if task_type == "user_create":
         playbook_name = "user_create.yml"
-        ansible_staff = StaffMember.query.filter_by(username="ansible").first()
+        target_usernames = []
+        raw_users = meta_parsed.get("extra_vars", {}).get("target_users", [])
+        if isinstance(raw_users, list):
+            for u in raw_users:
+                if isinstance(u, dict) and u.get("username"):
+                    target_usernames.append(u["username"])
+        if not target_usernames:
+            ansible_staff = StaffMember.query.filter_by(username="ansible").first()
+            if ansible_staff:
+                target_usernames.append(ansible_staff.username)
+
+        staff_list = StaffMember.query.filter(StaffMember.username.in_(target_usernames)).all()
         target_users = []
-        if ansible_staff:
+        for s in staff_list:
             target_users.append({
-                "username": ansible_staff.username,
-                "name": ansible_staff.name,
-                "ssh_key": ansible_staff.ssh_public_key or "",
-                "password": ansible_staff.password or "",
-                "sudo": ansible_staff.sudo_enabled
+                "username": s.username,
+                "name": s.name,
+                "ssh_key": s.ssh_public_key or "",
+                "password": s.password or "",
+                "sudo": s.sudo_enabled
             })
         extra_vars = {
             "target_users": target_users,
@@ -1830,7 +1838,22 @@ def task_retry_failed(task_id):
         }
     elif task_type == "user_delete":
         playbook_name = "user_delete.yml"
-        extra_vars = {"target_users": [{"username": "ansible"}]}
+        target_usernames = []
+        raw_users = meta_parsed.get("extra_vars", {}).get("target_users", [])
+        if isinstance(raw_users, list):
+            for u in raw_users:
+                if isinstance(u, dict) and u.get("username"):
+                    target_usernames.append(u["username"])
+        if not target_usernames:
+            target_usernames = ["ansible"]
+        extra_vars = {
+            "target_users": [{"username": uname} for uname in target_usernames],
+            "target_username": target_usernames[0],
+            "permanent_delete": meta_parsed.get("extra_vars", {}).get("permanent_delete", False)
+        }
+    elif meta_parsed.get("playbook_name"):
+        playbook_name = meta_parsed["playbook_name"]
+        extra_vars = meta_parsed.get("extra_vars", {})
     elif task_type == "ping":
         playbook_name = "ping_check.yml"
     elif task_type == "playbook_run":
@@ -1861,12 +1884,32 @@ def task_open_failed_in_user_ops(task_id):
         flash("Не найдено хостов с ошибками.", "warning")
         return redirect(url_for("task_detail", task_id=task.id))
 
+    meta_parsed = {}
+    try:
+        if task.filter_info and task.filter_info.strip().startswith("{"):
+            meta_parsed = json.loads(task.filter_info)
+    except Exception:
+        pass
+
+    target_usernames = []
+    raw_users = meta_parsed.get("extra_vars", {}).get("target_users", [])
+    if isinstance(raw_users, list):
+        for u in raw_users:
+            if isinstance(u, dict) and u.get("username"):
+                target_usernames.append(u["username"])
+
+    selected_staff_ids = []
+    if target_usernames:
+        matched_staff = StaffMember.query.filter(StaffMember.username.in_(target_usernames)).all()
+        selected_staff_ids = [str(s.id) for s in matched_staff]
+    if not selected_staff_ids:
+        ansible_staff = StaffMember.query.filter_by(username="ansible").first()
+        selected_staff_ids = [str(ansible_staff.id)] if ansible_staff else []
+
     selected_host_ids = [str(h.id) for h in failed_hosts]
     groups = HostGroup.query.order_by(HostGroup.name).all()
     all_hosts_count = Host.query.filter_by(is_enabled=True).count()
     staff_members = StaffMember.query.filter_by(is_active=True).order_by(StaffMember.name).all()
-    ansible_staff = StaffMember.query.filter_by(username="ansible").first()
-    selected_staff_ids = [str(ansible_staff.id)] if ansible_staff else []
 
     return render_template(
         "user_ops.html",

@@ -406,6 +406,48 @@ def test_audit_security_fixes():
     assert "PasswordLastSet" in DEFAULT_INACTIVE_USERS_SCRIPT
     print("  [OK] DEFAULT_INACTIVE_USERS_SCRIPT Fail-Close and fresh account safety verified.")
 
+def test_recap_and_failed_host_parsing():
+    print("\n--- 11. Testing Recap Parsing & Failed Hosts Detection ---")
+    from task_engine import parse_ansible_recap
+    import re
+
+    sample_log = """
+=== [ПРОХОД 1] Запуск Ansible для 3 хостов с основными профилями ===
+
+PLAY [Create Administrator Account on Linux & Windows] *************************
+
+TASK [Normalize target users list] *********************************************
+ok: [server1.example.com]
+ok: [Zabbix server]
+fatal: [bad-server]: UNREACHABLE! => {"changed": false, "msg": "Failed to connect to the host via ssh: Permission denied"}
+
+PLAY RECAP *********************************************************************
+server1.example.com        : ok=2    changed=0    unreachable=0    failed=0    skipped=3    rescued=0    ignored=0   
+Zabbix server              : ok=2    changed=0    unreachable=0    failed=0    skipped=3    rescued=0    ignored=0   
+bad-server                 : ok=0    changed=0    unreachable=1    failed=0    skipped=0    rescued=0    ignored=0   
+
+[ПОДБОР] Хост 'bad-server': отказ авторизации под 'Default SSH'. Следующая попытка: 'Alt Profile'...
+
+=== [ПРОХОД 2 (АВТО-ПОДБОР)] Повторная попытка для 1 хостов с альтернативными профилями ===
+
+PLAY RECAP *********************************************************************
+bad-server                 : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+"""
+    recap = parse_ansible_recap(sample_log)
+    assert "server1.example.com" in recap, "server1 must be parsed"
+    assert "Zabbix server" in recap, "Hostnames with spaces must be parsed in recap"
+    assert recap["server1.example.com"]["status"] == "ok"
+    assert recap["Zabbix server"]["status"] == "ok"
+    assert recap["bad-server"]["status"] == "ok"
+    # Ensure no spurious entries from log comments or task lines
+    assert "[ПОДБОР] Хост 'bad-server'" not in recap
+
+    # Test regex in get_failed_hosts_for_task for hostnames with spaces
+    log_line_space = "Zabbix server : ok=1 changed=0 unreachable=1 failed=0 skipped=0"
+    m = re.match(r'^\s*(.+?)\s*:\s*.*(?:unreachable=[1-9]|failed=[1-9])', log_line_space)
+    assert m is not None and m.group(1).strip() == "Zabbix server"
+    print("  [OK] Recap parsing handles spaces and multi-pass logs cleanly without spurious host entries.")
+
 if __name__ == "__main__":
     try:
         test_syntax()
@@ -418,6 +460,7 @@ if __name__ == "__main__":
         test_os_detection_and_manual_preservation()
         test_ssh_key_normalization_and_ping_escalation()
         test_audit_security_fixes()
+        test_recap_and_failed_host_parsing()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")
