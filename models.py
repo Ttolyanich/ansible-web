@@ -362,6 +362,22 @@ class Host(db.Model):
             return True
         return False
 
+    @property
+    def is_manual(self) -> bool:
+        """Check if host was added manually rather than auto-synced from Zabbix."""
+        if self.zabbix_hostid and str(self.zabbix_hostid).startswith("manual_"):
+            return True
+        if self.ip_source == "manual":
+            return True
+        return False
+
+    @property
+    def is_recent(self) -> bool:
+        """Check if host was created within the last 48 hours."""
+        if not self.created_at:
+            return False
+        return (datetime.utcnow() - self.created_at).total_seconds() < 172800
+
 
 
 class TaskJob(db.Model):

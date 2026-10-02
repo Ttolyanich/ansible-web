@@ -50,21 +50,27 @@
         </div>
     </div>
 
-    <!-- Tabs for Servers vs Equipment -->
+    <!-- Tabs: Zabbix vs Manual vs Equipment vs All -->
     <div class="flex items-center gap-2 border-b border-slate-800 pb-3 flex-wrap">
-        <a href="{{ url_for('hosts_view', tab='servers', q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
-           class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'servers' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
-            <i class="fa-solid fa-server"></i>
-            <span>Серверы (SSH)</span>
-            <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-950/60 font-mono">{{ count_servers }}</span>
+        <a href="{{ url_for('hosts_view', tab='zabbix', sort=sort_by, q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
+           class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'zabbix' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
+            <i class="fa-solid fa-cloud-arrow-down text-blue-400"></i>
+            <span>Серверы Zabbix</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-950/60 font-mono">{{ count_zabbix }}</span>
         </a>
-        <a href="{{ url_for('hosts_view', tab='equipment', q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
+        <a href="{{ url_for('hosts_view', tab='manual', sort=sort_by, q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
+           class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'manual' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
+            <i class="fa-solid fa-pen-to-square text-purple-400"></i>
+            <span>Вручную добавленные</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-950/60 font-mono">{{ count_manual }}</span>
+        </a>
+        <a href="{{ url_for('hosts_view', tab='equipment', sort=sort_by, q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
            class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'equipment' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
-            <i class="fa-solid fa-microchip"></i>
+            <i class="fa-solid fa-microchip text-rose-400"></i>
             <span>Оборудование (iDRAC / NAS / ИБП)</span>
             <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-950/60 font-mono">{{ count_equipment }}</span>
         </a>
-        <a href="{{ url_for('hosts_view', tab='all', q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
+        <a href="{{ url_for('hosts_view', tab='all', sort=sort_by, q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" 
            class="px-3.5 py-2 rounded-lg text-xs font-semibold transition flex items-center gap-2 {% if tab == 'all' %}bg-red-600 text-white shadow-lg shadow-red-900/30{% else %}bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800{% endif %}">
             <i class="fa-solid fa-list"></i>
             <span>Все хосты</span>
@@ -72,11 +78,26 @@
         </a>
     </div>
 
-    <!-- Filters Bar -->
+    <!-- Filters & Sorting Bar -->
     <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
-        <form method="GET" action="{{ url_for('hosts_view') }}" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
+        <form method="GET" action="{{ url_for('hosts_view') }}" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3 text-xs">
             <input type="hidden" name="tab" value="{{ tab }}">
             <input type="hidden" name="per_page" value="{{ per_page }}">
+
+            <!-- Sorting Selector -->
+            <div>
+                <label class="block text-slate-400 font-semibold mb-1">Сортировка</label>
+                <select name="sort" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-1 focus:ring-red-500 font-medium">
+                    <option value="newest" {% if sort_by == 'newest' %}selected{% endif %}>🕒 Сначала новые (по умолч.)</option>
+                    <option value="name_asc" {% if sort_by == 'name_asc' %}selected{% endif %}>🔤 Имя (А-Я / A-Z)</option>
+                    <option value="name_desc" {% if sort_by == 'name_desc' %}selected{% endif %}>🔤 Имя (Я-А / Z-A)</option>
+                    <option value="ip_asc" {% if sort_by == 'ip_asc' %}selected{% endif %}>🌐 По IP-адресу</option>
+                    <option value="status_online" {% if sort_by == 'status_online' %}selected{% endif %}>🟢 Сначала Online</option>
+                    <option value="status_offline" {% if sort_by == 'status_offline' %}selected{% endif %}>🔴 Сначала Offline</option>
+                    <option value="oldest" {% if sort_by == 'oldest' %}selected{% endif %}>🕒 Сначала старые</option>
+                </select>
+            </div>
+
             <!-- Search Query -->
             <div>
                 <label class="block text-slate-400 font-semibold mb-1">Поиск</label>
@@ -136,7 +157,7 @@
                 <button type="submit" class="w-full py-2 px-3 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg transition">
                     Применить
                 </button>
-                <a href="{{ url_for('hosts_view') }}" class="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition" title="Сбросить">
+                <a href="{{ url_for('hosts_view', tab=tab) }}" class="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition" title="Сбросить фильтры">
                     <i class="fa-solid fa-rotate-left"></i>
                 </a>
             </div>
@@ -155,11 +176,31 @@
                             <th class="py-3 px-4 w-10">
                                 <input type="checkbox" id="select-all" class="rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-red-500">
                             </th>
-                            <th class="py-3 px-4">Имя сервера</th>
-                            <th class="py-3 px-4">IP адрес</th>
+                            <th class="py-3 px-4">
+                                <a href="{{ url_for('hosts_view', tab=tab, sort='name_desc' if sort_by == 'name_asc' else 'name_asc', q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" class="inline-flex items-center gap-1.5 hover:text-white transition" title="Сортировать по имени">
+                                    <span>Имя сервера</span>
+                                    {% if sort_by == 'name_asc' %}<i class="fa-solid fa-arrow-up-a-z text-red-400"></i>
+                                    {% elif sort_by == 'name_desc' %}<i class="fa-solid fa-arrow-down-z-a text-red-400"></i>
+                                    {% else %}<i class="fa-solid fa-sort text-slate-600 text-[10px]"></i>{% endif %}
+                                </a>
+                            </th>
+                            <th class="py-3 px-4">
+                                <a href="{{ url_for('hosts_view', tab=tab, sort='ip_asc', q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" class="inline-flex items-center gap-1.5 hover:text-white transition" title="Сортировать по IP">
+                                    <span>IP адрес</span>
+                                    {% if sort_by == 'ip_asc' %}<i class="fa-solid fa-arrow-up-1-9 text-red-400"></i>
+                                    {% else %}<i class="fa-solid fa-sort text-slate-600 text-[10px]"></i>{% endif %}
+                                </a>
+                            </th>
                             <th class="py-3 px-4">ОС</th>
                             <th class="py-3 px-4">Группа компании</th>
-                            <th class="py-3 px-4">Статус SSH</th>
+                            <th class="py-3 px-4">
+                                <a href="{{ url_for('hosts_view', tab=tab, sort='status_offline' if sort_by == 'status_online' else 'status_online', q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page) }}" class="inline-flex items-center gap-1.5 hover:text-white transition" title="Сортировать по статусу">
+                                    <span>Статус SSH</span>
+                                    {% if sort_by == 'status_online' %}<i class="fa-solid fa-circle-check text-emerald-400"></i>
+                                    {% elif sort_by == 'status_offline' %}<i class="fa-solid fa-circle-xmark text-red-400"></i>
+                                    {% else %}<i class="fa-solid fa-sort text-slate-600 text-[10px]"></i>{% endif %}
+                                </a>
+                            </th>
                             <th class="py-3 px-4">Профиль кредов</th>
                             <th class="py-3 px-4 text-right">Настройки</th>
                         </tr>
@@ -176,10 +217,31 @@
                                 {% endif %}
                             </td>
                             <td class="py-3 px-4 font-semibold text-white">
-                                <a href="{{ url_for('host_detail', host_id=host.id) }}" class="hover:text-red-400 transition">
-                                    {{ host.name }}
-                                </a>
-                                <span class="text-[10px] text-slate-500 font-mono block">ID: {{ host.zabbix_hostid }}</span>
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <a href="{{ url_for('host_detail', host_id=host.id) }}" class="hover:text-red-400 transition">
+                                        {{ host.name }}
+                                    </a>
+                                    {% if host.is_manual %}
+                                    <span class="text-[9px] px-1.5 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-800 font-medium inline-flex items-center gap-1" title="Добавлен вручную">
+                                        <i class="fa-solid fa-pen-to-square text-[8px]"></i>Ручной
+                                    </span>
+                                    {% elif tab == 'all' or tab == 'equipment' %}
+                                    <span class="text-[9px] px-1.5 py-0.5 rounded bg-blue-950/70 text-blue-300 border border-blue-800/80 font-medium inline-flex items-center gap-1" title="Синхронизирован из Zabbix">
+                                        <i class="fa-solid fa-cloud text-[8px]"></i>Zabbix
+                                    </span>
+                                    {% endif %}
+                                    {% if host.is_recent %}
+                                    <span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700 inline-flex items-center gap-1 animate-pulse" title="Добавлен в течение последних 48 часов">
+                                        ✨ NEW
+                                    </span>
+                                    {% endif %}
+                                </div>
+                                <div class="flex items-center gap-2 text-[10px] text-slate-500 font-mono mt-0.5">
+                                    <span>ID: {{ host.zabbix_hostid }}</span>
+                                    {% if host.created_at %}
+                                    <span>• {{ host.created_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                                    {% endif %}
+                                </div>
                                 {% if not is_manageable %}
                                 <span class="text-[9px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-500 border border-slate-800 font-mono inline-flex items-center gap-1 mt-1">
                                     <i class="fa-solid fa-lock text-[8px]"></i>Только чтение
@@ -309,8 +371,27 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="8" class="text-center py-10 text-slate-500 text-sm">
-                                Хосты не найдены по заданным критериям фильтрации
+                            <td colspan="8" class="text-center py-12 px-4 text-slate-400">
+                                {% if tab == 'manual' %}
+                                <div class="max-w-md mx-auto space-y-3">
+                                    <div class="w-12 h-12 rounded-xl bg-purple-950/60 border border-purple-800 text-purple-400 flex items-center justify-center mx-auto text-xl">
+                                        <i class="fa-solid fa-pen-to-square"></i>
+                                    </div>
+                                    <h4 class="text-base font-semibold text-white">Вручную добавленных хостов пока нет</h4>
+                                    <p class="text-xs text-slate-400">Вы можете добавить сервер вручную (например, если его нет в Zabbix или это изолированный хост), указав IP, порт и профиль авторизации.</p>
+                                    {% if not current_user.is_auditor %}
+                                    <button type="button" onclick="openCreateHostModal()" class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white text-xs font-semibold shadow-lg shadow-red-900/30 transition">
+                                        <i class="fa-solid fa-plus"></i>
+                                        <span>Добавить сервер вручную</span>
+                                    </button>
+                                    {% endif %}
+                                </div>
+                                {% else %}
+                                <div class="space-y-1">
+                                    <p class="text-sm font-medium text-slate-300">Хосты не найдены</p>
+                                    <p class="text-xs text-slate-500">Попробуйте изменить поисковый запрос или сбросить фильтры.</p>
+                                </div>
+                                {% endif %}
                             </td>
                         </tr>
                         {% endfor %}
@@ -337,12 +418,12 @@
                     <div class="flex items-center gap-1.5">
                         <span>На странице:</span>
                         {% for n in [25, 50, 100, 200] %}
-                        <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=n, page=1) }}"
+                        <a href="{{ url_for('hosts_view', tab=tab, sort=sort_by, q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=n, page=1) }}"
                            class="px-2 py-0.5 rounded {% if per_page|string == n|string or ((not per_page or per_page is not defined) and n == 50) %}bg-red-600 text-white font-semibold{% else %}bg-slate-800 hover:bg-slate-700 text-slate-300{% endif %} transition">
                             {{ n }}
                         </a>
                         {% endfor %}
-                        <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page='all') }}"
+                        <a href="{{ url_for('hosts_view', tab=tab, sort=sort_by, q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page='all') }}"
                            class="px-2 py-0.5 rounded {% if per_page == 'all' %}bg-red-600 text-white font-semibold{% else %}bg-slate-800 hover:bg-slate-700 text-slate-300{% endif %} transition">
                             Все
                         </a>
@@ -353,7 +434,7 @@
                 {% if pagination and pagination.pages > 1 %}
                 <div class="flex items-center gap-1">
                     {% if pagination.has_prev %}
-                    <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page, page=pagination.prev_num) }}"
+                    <a href="{{ url_for('hosts_view', tab=tab, sort=sort_by, q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page, page=pagination.prev_num) }}"
                        class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition" title="Предыдущая">
                         <i class="fa-solid fa-chevron-left text-[10px]"></i>
                     </a>
@@ -370,7 +451,7 @@
                                 {{ p }}
                             </span>
                             {% else %}
-                            <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page, page=p) }}"
+                            <a href="{{ url_for('hosts_view', tab=tab, sort=sort_by, q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page, page=p) }}"
                                class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
                                 {{ p }}
                             </a>
@@ -381,7 +462,7 @@
                     {% endfor %}
 
                     {% if pagination.has_next %}
-                    <a href="{{ url_for('hosts_view', tab=tab, q=filter_q, group_id=filter_group_id, os=filter_os, status=filter_status, per_page=per_page, page=pagination.next_num) }}"
+                    <a href="{{ url_for('hosts_view', tab=tab, sort=sort_by, q=filter_q, group_id=filter_group_id, custom_group_id=filter_custom_group_id, os=filter_os, status=filter_status, per_page=per_page, page=pagination.next_num) }}"
                        class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition" title="Следующая">
                         <i class="fa-solid fa-chevron-right text-[10px]"></i>
                     </a>

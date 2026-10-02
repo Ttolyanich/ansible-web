@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta
 from functools import wraps
 import yaml
-from sqlalchemy import text, event
+from sqlalchemy import text, event, case
 from sqlalchemy.orm import joinedload
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, abort, send_from_directory
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -271,24 +271,36 @@ def dashboard():
 @app.route("/hosts")
 @login_required
 def hosts_view():
-    tab = request.args.get("tab", "servers").strip() # 'servers', 'equipment', 'all'
-    base_query = Host.query.filter_by(is_enabled=True)
+    tab = request.args.get("tab", "zabbix").strip() # 'zabbix', 'manual', 'servers', 'equipment', 'all'
+    if tab not in ("zabbix", "manual", "servers", "equipment", "all"):
+        tab = "zabbix"
 
+    base_query = Host.query.filter_by(is_enabled=True)
+    manual_filter = (Host.zabbix_hostid.ilike("manual_%")) | (Host.ip_source == "manual")
+
+    count_zabbix = base_query.filter_by(is_ignored=False).filter(~manual_filter).count()
+    count_manual = base_query.filter_by(is_ignored=False).filter(manual_filter).count()
     count_servers = base_query.filter_by(is_ignored=False).count()
     count_equipment = base_query.filter_by(is_ignored=True).count()
     count_total = base_query.count()
 
     query = base_query
-    if tab == "servers":
+    if tab == "zabbix":
+        query = query.filter_by(is_ignored=False).filter(~manual_filter)
+    elif tab == "manual":
+        query = query.filter_by(is_ignored=False).filter(manual_filter)
+    elif tab == "servers":
         query = query.filter_by(is_ignored=False)
     elif tab == "equipment":
         query = query.filter_by(is_ignored=True)
+    # tab == "all" keeps all enabled hosts
 
     filter_q = request.args.get("q", "").strip()
     filter_group_id = request.args.get("group_id", "").strip()
     filter_custom_group_id = request.args.get("custom_group_id", "").strip()
     filter_os = request.args.get("os", "").strip()
     filter_status = request.args.get("status", "").strip()
+    sort_by = request.args.get("sort", "newest").strip()
 
     if filter_q:
         query = query.filter(
@@ -308,12 +320,34 @@ def hosts_view():
         joinedload(Host.override_credential)
     )
 
+    if sort_by == "name_asc":
+        order_clauses = [Host.name.asc()]
+    elif sort_by == "name_desc":
+        order_clauses = [Host.name.desc()]
+    elif sort_by == "ip_asc":
+        order_clauses = [Host.ip_address.asc()]
+    elif sort_by == "status_online":
+        order_clauses = [
+            case((Host.last_status == 'online', 1), (Host.last_status == 'unknown', 2), else_=3),
+            Host.name.asc()
+        ]
+    elif sort_by == "status_offline":
+        order_clauses = [
+            case((Host.last_status == 'offline', 1), (Host.last_status == 'unknown', 2), else_=3),
+            Host.name.asc()
+        ]
+    elif sort_by == "oldest":
+        order_clauses = [Host.created_at.asc(), Host.id.asc()]
+    else: # 'newest' default
+        sort_by = "newest"
+        order_clauses = [Host.created_at.desc(), Host.id.desc()]
+
     page = request.args.get("page", 1, type=int)
     per_page_raw = request.args.get("per_page", "50").strip()
     show_all = per_page_raw == "all"
 
     if show_all:
-        hosts = query.order_by(Host.name).all()
+        hosts = query.order_by(*order_clauses).all()
         pagination = None
     else:
         try:
@@ -322,7 +356,7 @@ def hosts_view():
                 per_page = 50
         except ValueError:
             per_page = 50
-        pagination = query.order_by(Host.name).paginate(page=page, per_page=per_page, error_out=False)
+        pagination = query.order_by(*order_clauses).paginate(page=page, per_page=per_page, error_out=False)
         hosts = pagination.items
 
     groups = HostGroup.query.order_by(HostGroup.name).all()
@@ -338,6 +372,9 @@ def hosts_view():
         custom_groups=custom_groups,
         credential_profiles=credential_profiles,
         tab=tab,
+        sort_by=sort_by,
+        count_zabbix=count_zabbix,
+        count_manual=count_manual,
         count_servers=count_servers,
         count_equipment=count_equipment,
         count_total=count_total,
