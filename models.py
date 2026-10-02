@@ -365,11 +365,7 @@ class Host(db.Model):
     @property
     def is_manual(self) -> bool:
         """Check if host was added manually rather than auto-synced from Zabbix."""
-        if self.zabbix_hostid and str(self.zabbix_hostid).startswith("manual_"):
-            return True
-        if self.ip_source == "manual":
-            return True
-        return False
+        return bool(self.zabbix_hostid and str(self.zabbix_hostid).startswith("manual_"))
 
     @property
     def is_recent(self) -> bool:
