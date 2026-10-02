@@ -276,7 +276,7 @@ def hosts_view():
         tab = "zabbix"
 
     base_query = Host.query.filter_by(is_enabled=True)
-    manual_filter = Host.zabbix_hostid.ilike("manual_%")
+    manual_filter = (Host.zabbix_hostid.ilike("manual_%")) | (Host.ip_source == "manual") | (Host.is_ip_manually_set == True)
 
     count_zabbix = base_query.filter_by(is_ignored=False).filter(~manual_filter).count()
     count_manual = base_query.filter_by(is_ignored=False).filter(manual_filter).count()

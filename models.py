@@ -363,9 +363,18 @@ class Host(db.Model):
         return False
 
     @property
-    def is_manual(self) -> bool:
-        """Check if host was added manually rather than auto-synced from Zabbix."""
+    def is_manual_origin(self) -> bool:
+        """Host created from scratch via manual creation form."""
         return bool(self.zabbix_hostid and str(self.zabbix_hostid).startswith("manual_"))
+
+    @property
+    def is_manual(self) -> bool:
+        """Check if host was added manually or has manually overridden connection parameters."""
+        if self.is_manual_origin:
+            return True
+        if self.ip_source == "manual" or self.is_ip_manually_set:
+            return True
+        return False
 
     @property
     def is_recent(self) -> bool:
