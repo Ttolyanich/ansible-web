@@ -58,44 +58,117 @@
                 <span>Где выполнять плейбук? (Целевые серверы)</span>
             </h2>
 
-            <!-- Scope selector radio tabs -->
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {% set can_linux = current_user.can_run_on_os('linux') and meta.target_os != 'windows' %}
+            {% set can_windows = current_user.can_run_on_os('windows') and meta.target_os != 'linux' %}
+            {% set default_target = 'windows' if (current_user.is_windows_admin or meta.target_os == 'windows') else 'linux' %}
+
+            <!-- 4 Big Selection Buttons -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <!-- Button 1: Linux -->
+                {% if can_linux %}
                 <label class="cursor-pointer">
-                    <input type="radio" name="target_type" value="all" class="peer sr-only" checked onchange="toggleTargetScope()">
-                    <div class="p-3.5 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/20 text-xs transition">
-                        <div class="font-bold text-white flex items-center justify-between">
-                            <span>Все активные серверы</span>
-                            <i class="fa-solid fa-network-wired text-red-400"></i>
+                    <input type="radio" name="target_type" value="linux" class="peer sr-only" {% if default_target == 'linux' %}checked{% endif %} onchange="toggleTargetScope()">
+                    <div class="p-4 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-amber-500 peer-checked:bg-amber-950/20 text-xs transition h-full flex flex-col justify-between hover:border-slate-600">
+                        <div>
+                            <div class="font-bold text-white flex items-center justify-between">
+                                <span class="flex items-center gap-2"><i class="fa-brands fa-linux text-amber-400 text-lg"></i> Linux серверы</span>
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-amber-950/80 text-amber-300 border border-amber-800 font-mono">🐧 Linux</span>
+                            </div>
+                            <div class="text-slate-400 text-[11px] mt-2">Все активные серверы Linux в системе</div>
                         </div>
-                        <div class="text-slate-400 text-[11px] mt-1">Вся доступная инфраструктура ({{ all_hosts|length }} шт.)</div>
+                        <div class="mt-3 text-xs font-mono font-bold text-amber-400">
+                            {{ linux_hosts_count }} хостов
+                        </div>
                     </div>
                 </label>
-
-                <label class="cursor-pointer">
-                    <input type="radio" name="target_type" value="group" class="peer sr-only" onchange="toggleTargetScope()">
-                    <div class="p-3.5 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/20 text-xs transition">
-                        <div class="font-bold text-white flex items-center justify-between">
-                            <span>По группе / компании</span>
-                            <i class="fa-solid fa-folder-tree text-indigo-400"></i>
+                {% else %}
+                <div class="p-4 rounded-xl border border-slate-800/80 bg-slate-950/40 text-xs opacity-50 cursor-not-allowed flex flex-col justify-between select-none">
+                    <div>
+                        <div class="font-bold text-slate-500 flex items-center justify-between">
+                            <span class="flex items-center gap-2"><i class="fa-brands fa-linux text-slate-600 text-lg"></i> Linux серверы</span>
+                            <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-900 text-slate-500 border border-slate-800 font-mono">🔒 Заблокировано</span>
                         </div>
-                        <div class="text-slate-400 text-[11px] mt-1">Все серверы определенной группы</div>
+                        <div class="text-slate-600 text-[11px] mt-2">
+                            {% if meta.target_os == 'windows' %}Плейбук только для Windows{% else %}Недоступно для вашей роли{% endif %}
+                        </div>
+                    </div>
+                    <div class="mt-3 text-xs font-mono text-slate-600">
+                        {{ linux_hosts_count }} хостов
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Button 2: Windows -->
+                {% if can_windows %}
+                <label class="cursor-pointer">
+                    <input type="radio" name="target_type" value="windows" class="peer sr-only" {% if default_target == 'windows' %}checked{% endif %} onchange="toggleTargetScope()">
+                    <div class="p-4 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-sky-500 peer-checked:bg-sky-950/20 text-xs transition h-full flex flex-col justify-between hover:border-slate-600">
+                        <div>
+                            <div class="font-bold text-white flex items-center justify-between">
+                                <span class="flex items-center gap-2"><i class="fa-brands fa-windows text-sky-400 text-lg"></i> Windows серверы</span>
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-sky-950/80 text-sky-300 border border-sky-800 font-mono">🪟 Windows</span>
+                            </div>
+                            <div class="text-slate-400 text-[11px] mt-2">Все активные серверы Windows в системе</div>
+                        </div>
+                        <div class="mt-3 text-xs font-mono font-bold text-sky-400">
+                            {{ windows_hosts_count }} хостов
+                        </div>
                     </div>
                 </label>
+                {% else %}
+                <div class="p-4 rounded-xl border border-slate-800/80 bg-slate-950/40 text-xs opacity-50 cursor-not-allowed flex flex-col justify-between select-none">
+                    <div>
+                        <div class="font-bold text-slate-500 flex items-center justify-between">
+                            <span class="flex items-center gap-2"><i class="fa-brands fa-windows text-slate-600 text-lg"></i> Windows серверы</span>
+                            <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-900 text-slate-500 border border-slate-800 font-mono">🔒 Заблокировано</span>
+                        </div>
+                        <div class="text-slate-600 text-[11px] mt-2">
+                            {% if meta.target_os == 'linux' %}Плейбук только для Linux{% else %}Недоступно для вашей роли{% endif %}
+                        </div>
+                    </div>
+                    <div class="mt-3 text-xs font-mono text-slate-600">
+                        {{ windows_hosts_count }} хостов
+                    </div>
+                </div>
+                {% endif %}
 
+                <!-- Button 3: Preselected Hosts -->
                 <label class="cursor-pointer">
                     <input type="radio" name="target_type" value="preselected" class="peer sr-only" onchange="toggleTargetScope()">
-                    <div class="p-3.5 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-red-500 peer-checked:bg-red-950/20 text-xs transition">
-                        <div class="font-bold text-white flex items-center justify-between">
-                            <span>Выборочные серверы</span>
-                            <i class="fa-solid fa-list-check text-emerald-400"></i>
+                    <div class="p-4 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-emerald-500 peer-checked:bg-emerald-950/20 text-xs transition h-full flex flex-col justify-between hover:border-slate-600">
+                        <div>
+                            <div class="font-bold text-white flex items-center justify-between">
+                                <span class="flex items-center gap-2"><i class="fa-solid fa-list-check text-emerald-400 text-lg"></i> Указанные хосты</span>
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-emerald-950/80 text-emerald-300 border border-emerald-800 font-mono">🎯 Выборочно</span>
+                            </div>
+                            <div class="text-slate-400 text-[11px] mt-2">Выбрать конкретные серверы из списка вручную</div>
                         </div>
-                        <div class="text-slate-400 text-[11px] mt-1">Выбрано вручную: <span id="selected-counter" class="font-mono text-emerald-400 font-bold">0</span> шт.</div>
+                        <div class="mt-3 text-xs font-mono font-bold text-emerald-400">
+                            Выбрано: <span id="selected-counter">0</span> шт.
+                        </div>
+                    </div>
+                </label>
+
+                <!-- Button 4: Group -->
+                <label class="cursor-pointer">
+                    <input type="radio" name="target_type" value="group" class="peer sr-only" onchange="toggleTargetScope()">
+                    <div class="p-4 rounded-xl border border-slate-700 bg-slate-950 peer-checked:border-indigo-500 peer-checked:bg-indigo-950/20 text-xs transition h-full flex flex-col justify-between hover:border-slate-600">
+                        <div>
+                            <div class="font-bold text-white flex items-center justify-between">
+                                <span class="flex items-center gap-2"><i class="fa-solid fa-folder-tree text-indigo-400 text-lg"></i> По группе</span>
+                                <span class="px-2 py-0.5 rounded text-[10px] bg-indigo-950/80 text-indigo-300 border border-indigo-800 font-mono">📁 Компания</span>
+                            </div>
+                            <div class="text-slate-400 text-[11px] mt-2">Все хосты определенной группы / компании</div>
+                        </div>
+                        <div class="mt-3 text-xs font-mono font-bold text-indigo-400">
+                            {{ groups|length }} групп
+                        </div>
                     </div>
                 </label>
             </div>
 
             <!-- Group Selector Row -->
-            <div id="scope-group-wrapper" class="hidden pt-2">
+            <div id="scope-group-wrapper" class="hidden pt-3 border-t border-slate-800/80">
                 <label class="block text-xs font-semibold text-slate-300 mb-1.5">Выберите группу серверов:</label>
                 <select name="group_id" class="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-2 focus:ring-red-500 focus:outline-none">
                     {% for g in groups %}
@@ -104,49 +177,78 @@
                     </option>
                     {% endfor %}
                 </select>
+                {% if current_user.is_linux_admin %}
+                <div class="text-[11px] text-amber-400 mt-1 flex items-center gap-1">
+                    <i class="fa-solid fa-shield-halved"></i> Защита роли: запуск произойдет только на Linux-серверах выбранной группы.
+                </div>
+                {% elif current_user.is_windows_admin %}
+                <div class="text-[11px] text-sky-400 mt-1 flex items-center gap-1">
+                    <i class="fa-solid fa-shield-halved"></i> Защита роли: запуск произойдет только на Windows-серверах выбранной группы.
+                </div>
+                {% endif %}
             </div>
 
             <!-- Preselected Host Picker Row -->
-            <div id="scope-preselected-wrapper" class="hidden pt-2 space-y-2">
+            <div id="scope-preselected-wrapper" class="hidden pt-3 border-t border-slate-800/80 space-y-2">
                 <div class="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-xs">
                     <div class="flex items-center gap-2">
-                        <input type="text" id="host-search" placeholder="Поиск по имени или IP..." onkeyup="filterHostList()" class="px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-white text-xs placeholder-slate-500 focus:outline-none w-52">
+                        <input type="text" id="host-search" placeholder="Поиск по имени или IP..." onkeyup="filterHostList()" class="px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-white text-xs placeholder-slate-500 focus:outline-none w-52 sm:w-64">
                     </div>
                     <div class="flex items-center gap-2">
-                        <button type="button" onclick="selectAllHosts(true)" class="text-xs text-red-400 hover:text-red-300 font-medium">Выбрать все</button>
+                        <button type="button" onclick="selectAllHosts(true)" class="text-xs text-red-400 hover:text-red-300 font-medium">Выбрать все разрешенные</button>
                         <span class="text-slate-600">|</span>
                         <button type="button" onclick="selectAllHosts(false)" class="text-xs text-slate-400 hover:text-slate-300 font-medium">Сбросить</button>
                     </div>
                 </div>
 
-                <div class="max-h-60 overflow-y-auto border border-slate-800 rounded-lg divide-y divide-slate-800/80 bg-slate-950/60 p-1" id="hosts-container">
+                <div class="max-h-64 overflow-y-auto border border-slate-800 rounded-lg divide-y divide-slate-800/80 bg-slate-950/60 p-1" id="hosts-container">
                     {% for h in all_hosts %}
-                    <label class="flex items-center justify-between p-2 hover:bg-slate-900 rounded cursor-pointer host-item-row" data-name="{{ h.name|lower }}" data-ip="{{ (h.ip or '')|lower }}">
+                    {% set is_manageable = current_user.can_run_on_os(h.os_type) and (meta.target_os == 'all' or meta.target_os == h.os_type) %}
+                    <label class="flex items-center justify-between p-2 rounded {% if is_manageable %}hover:bg-slate-900 cursor-pointer{% else %}opacity-45 bg-slate-950/40 cursor-not-allowed{% endif %} host-item-row" data-name="{{ h.name|lower }}" data-ip="{{ (h.ip or '')|lower }}" data-os="{{ h.os_type }}">
                         <div class="flex items-center gap-2.5">
+                            {% if is_manageable %}
                             <input type="checkbox" name="selected_hosts" value="{{ h.id }}" onchange="updateSelectedCount()" class="host-checkbox rounded border-slate-700 bg-slate-900 text-red-600 focus:ring-red-500">
-                            <span class="text-xs font-semibold text-white">{{ h.name }}</span>
+                            {% else %}
+                            <span class="w-4 h-4 flex items-center justify-center text-slate-600"><i class="fa-solid fa-lock text-[10px]"></i></span>
+                            {% endif %}
+                            <span class="text-xs font-semibold {% if is_manageable %}text-white{% else %}text-slate-500{% endif %}">{{ h.name }}</span>
                             <span class="text-[11px] font-mono text-slate-400">({{ h.ip or 'No IP' }})</span>
                         </div>
-                        <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">{{ h.os_type }}</span>
+                        <div class="flex items-center gap-2">
+                            {% if not is_manageable %}
+                            <span class="text-[9px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-500 border border-slate-800 font-mono">🔒 Только чтение</span>
+                            {% endif %}
+                            <span class="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded {% if h.os_type == 'linux' %}bg-amber-950/60 text-amber-400 border border-amber-800/50{% else %}bg-sky-950/60 text-sky-400 border border-sky-800/50{% endif %}">{{ h.os_type }}</span>
+                        </div>
                     </label>
                     {% endfor %}
                 </div>
             </div>
 
-            <!-- OS Filter & Credential Profile -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-800/80">
+            <!-- Credential Profile & OS Directive Info -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-slate-800/80">
                 <div>
-                    <label class="block text-xs font-semibold text-slate-300 mb-1.5">Фильтр по операционной системе:</label>
-                    <select name="target_os" class="w-full px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-2 focus:ring-red-500 focus:outline-none">
-                        <option value="all">Все ОС (Linux и Windows)</option>
-                        <option value="linux" selected>Только Linux серверы</option>
-                        <option value="windows">Только Windows серверы</option>
-                    </select>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                        <i class="fa-solid fa-desktop text-slate-400"></i>
+                        <span>Целевая ОС сценария:</span>
+                    </label>
+                    <div class="px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs flex items-center gap-2">
+                        {% if meta.target_os == 'linux' %}
+                        <span class="px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 font-mono font-bold">🐧 Linux</span>
+                        <span class="text-slate-400 text-[11px]">Сценарий предназначен только для Linux-хостов</span>
+                        {% elif meta.target_os == 'windows' %}
+                        <span class="px-2 py-0.5 rounded bg-sky-950 text-sky-300 border border-sky-800 font-mono font-bold">🪟 Windows</span>
+                        <span class="text-slate-400 text-[11px]">Сценарий предназначен только для Windows-хостов</span>
+                        {% else %}
+                        <span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono font-bold">🌐 Все ОС</span>
+                        <span class="text-slate-400 text-[11px]">Кроссплатформенный сценарий</span>
+                        {% endif %}
+                    </div>
                 </div>
                 <div>
                     <label class="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
                         <i class="fa-solid fa-key text-amber-400"></i>
-                        <span>Профиль подключения SSH:</span>
+                        <span>Профиль подключения SSH / WinRM:</span>
                     </label>
                     <select name="credential_profile_id" class="w-full px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-2 focus:ring-red-500 focus:outline-none font-mono">
                         <option value="">⚙️ Авто (по умолчанию в системе / для хоста)</option>
@@ -159,7 +261,7 @@
                 </div>
             </div>
             <p class="text-[11px] text-slate-500">
-                * Если выбран конкретный профиль (например, <b>ansible</b>), Ansible будет подключаться именно под ним в первую очередь, минуя root.
+                * Если выбран конкретный профиль (например, <b>ansible</b>), Ansible будет подключаться именно под ним в первую очередь.
             </p>
         </div>
 
@@ -237,9 +339,9 @@ function updateSelectedCount() {
 function selectAllHosts(state) {
     const checkboxes = document.querySelectorAll('.host-checkbox');
     checkboxes.forEach(cb => {
-        // Only select if not hidden by search filter
+        if (cb.disabled) return;
         const row = cb.closest('.host-item-row');
-        if (row.style.display !== 'none') {
+        if (row && row.style.display !== 'none') {
             cb.checked = state;
         }
     });
@@ -281,7 +383,12 @@ function formatExtraVarsJson() {
 }
 
 function confirmLaunch() {
-    const scope = document.querySelector('input[name="target_type"]:checked').value;
+    const checkedRadio = document.querySelector('input[name="target_type"]:checked');
+    if (!checkedRadio) {
+        alert('Пожалуйста, выберите целевые серверы!');
+        return false;
+    }
+    const scope = checkedRadio.value;
     const extraVarsRaw = document.getElementById('extra-vars-input').value.trim();
 
     if (extraVarsRaw) {
@@ -304,10 +411,20 @@ function confirmLaunch() {
     } else if (scope === 'group') {
         const select = document.querySelector('select[name="group_id"]');
         const groupName = select.options[select.selectedIndex].text;
-        return confirm(`Запустить плейбук «{{ filename }}» на всех серверах группы:\n${groupName}?`);
+        return confirm(`Запустить плейбук «{{ filename }}» на серверах группы:\n${groupName}?`);
+    } else if (scope === 'linux') {
+        return confirm(`Запустить плейбук «{{ filename }}» на ВСЕХ серверах Linux ({{ linux_hosts_count }} шт.)?`);
+    } else if (scope === 'windows') {
+        return confirm(`Запустить плейбук «{{ filename }}» на ВСЕХ серверах Windows ({{ windows_hosts_count }} шт.)?`);
     } else {
-        return confirm(`ВНИМАНИЕ! Вы запускаете плейбук «{{ filename }}» на ВСЕХ серверах инфраструктуры.\n\nПродолжить?`);
+        return confirm(`ВНИМАНИЕ! Вы запускаете плейбук «{{ filename }}» на серверах инфраструктуры.\n\nПродолжить?`);
     }
 }
+
+// Initial sync
+document.addEventListener('DOMContentLoaded', function() {
+    toggleTargetScope();
+    updateSelectedCount();
+});
 </script>
 {% endblock %}

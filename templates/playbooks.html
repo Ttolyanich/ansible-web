@@ -16,12 +16,14 @@
             </p>
         </div>
 
+        {% if current_user.can_create_playbooks %}
         <div class="w-full sm:w-auto flex items-center gap-2.5">
             <a href="{{ url_for('playbook_new') }}" class="w-full sm:w-auto justify-center px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-lg shadow-md shadow-red-950/40 transition flex items-center gap-2">
                 <i class="fa-solid fa-plus"></i>
                 <span>Создать плейбук</span>
             </a>
         </div>
+        {% endif %}
     </div>
 
     <!-- Stats Row -->
@@ -115,15 +117,31 @@
                         </div>
                     </div>
 
-                    {% if pb.is_system %}
-                        <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-blue-950/80 text-blue-300 border border-blue-800/60 shrink-0">
-                            Системный
-                        </span>
-                    {% else %}
-                        <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-purple-950/80 text-purple-300 border border-purple-800/60 shrink-0">
-                            Кастомный
-                        </span>
-                    {% endif %}
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                        {% if pb.target_os == 'linux' %}
+                            <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-amber-950/80 text-amber-300 border border-amber-800/60 shrink-0">
+                                🐧 Linux
+                            </span>
+                        {% elif pb.target_os == 'windows' %}
+                            <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-sky-950/80 text-sky-300 border border-sky-800/60 shrink-0">
+                                🪟 Windows
+                            </span>
+                        {% else %}
+                            <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-slate-800 text-slate-300 border border-slate-700 shrink-0">
+                                🌐 Все ОС
+                            </span>
+                        {% endif %}
+
+                        {% if pb.is_system %}
+                            <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-blue-950/80 text-blue-300 border border-blue-800/60 shrink-0">
+                                Системный
+                            </span>
+                        {% else %}
+                            <span class="px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider bg-purple-950/80 text-purple-300 border border-purple-800/60 shrink-0">
+                                Кастомный
+                            </span>
+                        {% endif %}
+                    </div>
                 </div>
 
                 <!-- Description -->
@@ -152,27 +170,37 @@
 
             <!-- Actions Footer -->
             <div class="mt-5 pt-3.5 border-t border-slate-800 flex items-center justify-between gap-2">
+                {% set can_run = not current_user.is_auditor and current_user.can_run_playbook(pb.filename, pb.target_os) %}
+                {% if can_run %}
                 <a href="{{ url_for('playbook_run', filename=pb.filename) }}" class="flex-1 py-2 px-3 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-semibold text-center transition flex items-center justify-center gap-1.5 shadow-sm">
                     <i class="fa-solid fa-play text-[10px]"></i>
                     <span>Запустить</span>
                 </a>
+                {% else %}
+                <button type="button" disabled title="Запуск заблокирован для вашей роли" class="flex-1 py-2 px-3 bg-slate-800/60 text-slate-500 rounded-lg text-xs font-semibold text-center border border-slate-800 cursor-not-allowed flex items-center justify-center gap-1.5">
+                    <i class="fa-solid fa-lock text-[10px]"></i>
+                    <span>Недоступно</span>
+                </button>
+                {% endif %}
 
-                <a href="{{ url_for('playbook_edit', filename=pb.filename) }}" title="Просмотреть / Редактировать код" class="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium transition border border-slate-700">
-                    <i class="fa-solid fa-pen-to-square"></i>
+                {% set can_edit = current_user.can_create_playbooks and (current_user.is_admin or (current_user.is_linux_admin and pb.target_os == 'linux') or (current_user.is_windows_admin and pb.target_os == 'windows')) %}
+                <a href="{{ url_for('playbook_edit', filename=pb.filename) }}" title="{% if can_edit %}Редактировать код{% else %}Просмотреть код (только чтение){% endif %}" class="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium transition border border-slate-700">
+                    <i class="fa-solid {% if can_edit %}fa-pen-to-square{% else %}fa-eye text-slate-400{% endif %}"></i>
                 </a>
 
                 <a href="{{ url_for('playbook_download', filename=pb.filename) }}" title="Скачать файл YAML" class="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium transition border border-slate-700">
                     <i class="fa-solid fa-download"></i>
                 </a>
 
-                {% if not pb.is_system %}
+                {% set can_delete = not pb.is_system and current_user.can_create_playbooks and (current_user.is_admin or (current_user.is_linux_admin and pb.target_os == 'linux') or (current_user.is_windows_admin and pb.target_os == 'windows')) %}
+                {% if can_delete %}
                 <form action="{{ url_for('playbook_delete', filename=pb.filename) }}" method="POST" onsubmit="return confirm('Вы действительно хотите удалить плейбук «{{ pb.filename }}»? Это действие необратимо.');" class="inline">
                     <button type="submit" title="Удалить плейбук" class="py-2 px-3 bg-slate-800 hover:bg-red-950/80 text-slate-400 hover:text-red-400 rounded-lg text-xs font-medium transition border border-slate-700 hover:border-red-800">
                         <i class="fa-solid fa-trash"></i>
                     </button>
                 </form>
                 {% else %}
-                <button type="button" disabled title="Системный плейбук защищен от удаления" class="py-2 px-3 bg-slate-900/50 text-slate-600 rounded-lg text-xs font-medium border border-slate-800/80 cursor-not-allowed">
+                <button type="button" disabled title="{% if pb.is_system %}Системный плейбук защищен от удаления{% else %}Удаление заблокировано для вашей роли{% endif %}" class="py-2 px-3 bg-slate-900/50 text-slate-600 rounded-lg text-xs font-medium border border-slate-800/80 cursor-not-allowed">
                     <i class="fa-solid fa-lock"></i>
                 </button>
                 {% endif %}

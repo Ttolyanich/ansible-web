@@ -18,6 +18,7 @@
                 <i class="fa-solid fa-plus"></i>
                 <span>Новый сервер</span>
             </button>
+            {% if not current_user.is_auditor %}
             <form action="{{ url_for('sync_zabbix_now') }}" method="POST" class="col-span-2 sm:col-span-1">
                 <button type="submit" class="w-full justify-center px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition flex items-center gap-1.5 cursor-pointer">
                     <i class="fa-solid fa-arrows-rotate text-blue-400"></i>
@@ -40,6 +41,12 @@
                 <i class="fa-solid fa-tags text-indigo-400"></i>
                 <span>Метки (<span id="selected-count-tag">0</span>)</span>
             </button>
+            {% else %}
+            <div class="col-span-2 sm:col-span-4 px-3.5 py-2 bg-slate-950 border border-slate-800 text-slate-500 text-xs rounded-lg flex items-center gap-2">
+                <i class="fa-solid fa-lock text-slate-500"></i>
+                <span>Режим аудитора: пакетные операции и синхронизация отключены.</span>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -159,15 +166,25 @@
                     </thead>
                     <tbody class="divide-y divide-slate-800">
                         {% for host in hosts %}
-                        <tr class="hover:bg-slate-800/40 transition">
+                        {% set is_manageable = current_user.can_run_on_os(host.os_type) and not current_user.is_auditor %}
+                        <tr class="hover:bg-slate-800/40 transition {% if not is_manageable %}opacity-75{% endif %}">
                             <td class="py-3 px-4">
+                                {% if is_manageable %}
                                 <input type="checkbox" name="host_ids" value="{{ host.id }}" class="host-checkbox rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-red-500">
+                                {% else %}
+                                <span class="text-slate-600 cursor-not-allowed" title="Только чтение: управление хостом заблокировано для вашей роли"><i class="fa-solid fa-lock text-xs"></i></span>
+                                {% endif %}
                             </td>
                             <td class="py-3 px-4 font-semibold text-white">
                                 <a href="{{ url_for('host_detail', host_id=host.id) }}" class="hover:text-red-400 transition">
                                     {{ host.name }}
                                 </a>
                                 <span class="text-[10px] text-slate-500 font-mono block">ID: {{ host.zabbix_hostid }}</span>
+                                {% if not is_manageable %}
+                                <span class="text-[9px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-500 border border-slate-800 font-mono inline-flex items-center gap-1 mt-1">
+                                    <i class="fa-solid fa-lock text-[8px]"></i>Только чтение
+                                </span>
+                                {% endif %}
                                 {% if host.custom_groups %}
                                 <div class="flex items-center gap-1 mt-1 flex-wrap">
                                     {% for cg in host.custom_groups %}
@@ -543,7 +560,9 @@
 
     if (selectAll) {
         selectAll.addEventListener('change', function() {
-            checkboxes.forEach(cb => cb.checked = selectAll.checked);
+            checkboxes.forEach(cb => {
+                if (!cb.disabled) cb.checked = selectAll.checked;
+            });
             updateCount();
         });
     }

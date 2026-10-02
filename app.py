@@ -133,8 +133,30 @@ def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated or not current_user.is_admin:
-            flash("У вас нет прав администратора для выполнения этого действия.", "danger")
+            flash("У вас нет прав глобального администратора для выполнения этого действия.", "danger")
             return redirect(url_for("dashboard"))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def write_required(f):
+    """Denies execution and data mutation for auditors (read-only users)."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return redirect(url_for("login"))
+        if current_user.is_read_only:
+            flash("У вас роль Аудитора (только чтение). Запуск сценариев и изменение данных запрещены.", "warning")
+            return redirect(request.referrer or url_for("dashboard"))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def playbook_create_required(f):
+    """Allows admin, linux_admin, windows_admin to create/edit playbooks."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.can_create_playbooks:
+            flash("У вас нет прав на создание или редактирование плейбуков.", "danger")
+            return redirect(url_for("playbooks_view"))
         return f(*args, **kwargs)
     return decorated_function
 
@@ -512,8 +534,13 @@ def host_detail(host_id):
 
 @app.route("/hosts/<int:host_id>/bootstrap", methods=["POST"])
 @login_required
+@write_required
 def bootstrap_host_view(host_id):
     host = db.get_or_404(Host, host_id)
+    if not current_user.can_run_on_os(host.os_type):
+        flash(f"Защита от дурака: у вашей роли нет прав на выполнение операций на сервере «{host.name}» ({host.os_type}).", "danger")
+        return redirect(url_for("host_detail", host_id=host.id))
+
     timezone = request.form.get("timezone", "Asia/Almaty").strip()
     install_zabbix = request.form.get("install_zabbix_agent") == "1"
     cred_profile_id = request.form.get("credential_profile_id")
@@ -568,13 +595,26 @@ def bootstrap_host_view(host_id):
 # -------------------------------------------------------------
 @app.route("/ping/all", methods=["POST"])
 @login_required
+@write_required
 def run_ping_all():
-    hosts = Host.query.filter_by(is_enabled=True, is_ignored=False).all()
+    query = Host.query.filter_by(is_enabled=True, is_ignored=False)
+    if current_user.is_linux_admin:
+        query = query.filter_by(os_type="linux")
+    elif current_user.is_windows_admin:
+        query = query.filter_by(os_type="windows")
+
+    hosts = query.all()
     if not hosts:
         flash("Нет активных серверов для проверки.", "warning")
         return redirect(url_for("dashboard"))
 
     host_ids = [h.id for h in hosts]
+    summary_label = f" ({len(host_ids)} серверов)"
+    if current_user.is_linux_admin:
+        summary_label = f" ({len(host_ids)} Linux-серверов)"
+    elif current_user.is_windows_admin:
+        summary_label = f" ({len(host_ids)} Windows-серверов)"
+
     task_id = dispatch_task(
         app=app,
         task_type="ping",
@@ -582,14 +622,15 @@ def run_ping_all():
         host_ids=host_ids,
         extra_vars={},
         user_id=current_user.id,
-        summary=f"Быстрая SSH проверка доступности ({len(host_ids)} серверов)",
-        filter_info="Все активные серверы"
+        summary=f"Быстрая SSH проверка доступности{summary_label}",
+        filter_info="Все разрешенные серверы"
     )
     flash(f"Запущена проверка доступности для {len(host_ids)} серверов (спецоборудование исключено).", "info")
     return redirect(url_for("task_detail", task_id=task_id))
 
 @app.route("/ping/batch", methods=["POST"])
 @login_required
+@write_required
 def run_ping_batch():
     raw_ids = request.form.getlist("host_ids")
     if not raw_ids:
@@ -597,17 +638,34 @@ def run_ping_batch():
         return redirect(url_for("hosts_view"))
 
     host_ids = [int(i) for i in raw_ids if i.isdigit()]
+    hosts = Host.query.filter(Host.id.in_(host_ids)).all()
+    if not hosts:
+        flash("Хосты не найдены.", "warning")
+        return redirect(url_for("hosts_view"))
+
+    if current_user.is_linux_admin:
+        invalid = [h for h in hosts if h.os_type != "linux"]
+        if invalid:
+            flash(f"Защита от дурака: хост «{invalid[0].name}» является Windows-сервером. Вы можете проверять только Linux.", "danger")
+            return redirect(url_for("hosts_view"))
+    elif current_user.is_windows_admin:
+        invalid = [h for h in hosts if h.os_type != "windows"]
+        if invalid:
+            flash(f"Защита от дурака: хост «{invalid[0].name}» является Linux-сервером. Вы можете проверять только Windows.", "danger")
+            return redirect(url_for("hosts_view"))
+
+    valid_host_ids = [h.id for h in hosts]
     task_id = dispatch_task(
         app=app,
         task_type="ping",
         playbook_name="ping_check.yml",
-        host_ids=host_ids,
+        host_ids=valid_host_ids,
         extra_vars={},
         user_id=current_user.id,
-        summary=f"Выборочная SSH проверка ({len(host_ids)} хостов)",
-        filter_info=f"Выбрано хостов: {len(host_ids)}"
+        summary=f"Выборочная SSH проверка ({len(valid_host_ids)} хостов)",
+        filter_info=f"Выбрано хостов: {len(valid_host_ids)}"
     )
-    flash(f"Запущена проверка доступности для {len(host_ids)} хостов.", "info")
+    flash(f"Запущена проверка доступности для {len(valid_host_ids)} хостов.", "info")
     return redirect(url_for("task_detail", task_id=task_id))
 
 
@@ -909,7 +967,12 @@ def inactive_users_preview():
 
 @app.route("/staff/inactive-users/deploy", methods=["POST"])
 @login_required
+@write_required
 def deploy_inactive_users_task():
+    if not current_user.can_manage_windows:
+        flash("Защита от дурака: у вашей роли нет прав на управление Windows-серверами.", "danger")
+        return redirect(url_for("staff_view"))
+
     exclude_dc = request.form.get("exclude_dc", "1") == "1"
     all_win_hosts = Host.query.filter_by(os_type="windows", is_enabled=True).all()
     if not all_win_hosts:
@@ -951,7 +1014,12 @@ def deploy_inactive_users_task():
 
 @app.route("/staff/inactive-users/audit", methods=["POST"])
 @login_required
+@write_required
 def audit_inactive_users_task():
+    if not current_user.can_manage_windows:
+        flash("Защита от дурака: у вашей роли нет прав на управление Windows-серверами.", "danger")
+        return redirect(url_for("staff_view"))
+
     exclude_dc = request.form.get("exclude_dc", "1") == "1"
     all_win_hosts = Host.query.filter_by(os_type="windows", is_enabled=True).all()
     excluded_ids = []
@@ -980,6 +1048,7 @@ def audit_inactive_users_task():
 # -------------------------------------------------------------
 @app.route("/user-ops", methods=["GET", "POST"])
 @login_required
+@write_required
 def user_ops_view():
     selected_host_ids = []
     if request.method == "POST":
@@ -998,6 +1067,8 @@ def user_ops_view():
         (Host.name.ilike("%_dc%")) | (Host.name.ilike("%-dc%")) | (Host.name.ilike("%dc")) | (Host.name.ilike("dc-%"))
     ).count()
     all_hosts_count = Host.query.filter_by(is_enabled=True).count()
+    linux_hosts_count = Host.query.filter_by(is_enabled=True, os_type="linux").count()
+    windows_hosts_count = Host.query.filter_by(is_enabled=True, os_type="windows").count()
     staff_members = StaffMember.query.filter_by(is_active=True).order_by(StaffMember.name).all()
     selected_staff_ids = request.args.getlist("staff_ids")
     if not selected_staff_ids and request.args.get("staff_ids"):
@@ -1018,6 +1089,8 @@ def user_ops_view():
         dc_count=dc_count,
         all_hosts=all_hosts,
         all_hosts_count=all_hosts_count,
+        linux_hosts_count=linux_hosts_count,
+        windows_hosts_count=windows_hosts_count,
         selected_host_ids=selected_host_ids,
         selected_group_id=request.args.get("group_id", ""),
         staff_members=staff_members,
@@ -1027,11 +1100,16 @@ def user_ops_view():
 
 @app.route("/user-ops/run", methods=["POST"])
 @login_required
+@write_required
 def run_user_ops():
     operation = request.form.get("operation", "create") # 'create' or 'delete'
-    target_type = request.form.get("target_type", "all") # 'all', 'group', 'preselected'
+    target_type = request.form.get("target_type", "all") # 'linux', 'windows', 'group', 'preselected', 'all'
     target_os = request.form.get("target_os", "all") # 'all', 'linux', 'windows'
     source_mode = request.form.get("source_mode", "catalog") # 'catalog' or 'manual'
+
+    if current_user.is_operator and operation == "delete" and request.form.get("permanent_delete") == "1":
+        flash("Роли «Оператор» запрещено безвозвратное удаление учетных записей. Доступно только отключение.", "danger")
+        return redirect(url_for("user_ops_view"))
 
     target_users = []
 
@@ -1086,7 +1164,29 @@ def run_user_ops():
     # Determine target hosts
     query = Host.query.filter_by(is_enabled=True)
 
-    if target_type == "preselected":
+    if target_type == "linux":
+        if not current_user.can_manage_linux:
+            flash("Защита от дурака: у вашей роли нет прав на управление Linux-серверами.", "danger")
+            return redirect(url_for("user_ops_view"))
+        query = query.filter_by(os_type="linux")
+    elif target_type == "windows":
+        if not current_user.can_manage_windows:
+            flash("Защита от дурака: у вашей роли нет прав на управление Windows-серверами.", "danger")
+            return redirect(url_for("user_ops_view"))
+        query = query.filter_by(os_type="windows")
+    elif target_type == "group":
+        group_id = request.form.get("group_id")
+        if not group_id:
+            flash("Не выбрана целевая группа.", "danger")
+            return redirect(url_for("user_ops_view"))
+        query = query.filter_by(group_id=int(group_id))
+        if current_user.is_linux_admin:
+            query = query.filter_by(os_type="linux")
+        elif current_user.is_windows_admin:
+            query = query.filter_by(os_type="windows")
+        elif target_os in ("linux", "windows"):
+            query = query.filter_by(os_type=target_os)
+    elif target_type == "preselected":
         ids_list = []
         # Source 1: form getlist for 'host_ids', 'selected_host_ids', or 'selected_hosts'
         for val in request.form.getlist("host_ids") + request.form.getlist("selected_host_ids") + request.form.getlist("selected_hosts"):
@@ -1125,12 +1225,13 @@ def run_user_ops():
             flash("Список выбранных хостов пуст.", "danger")
             return redirect(url_for("user_ops_view"))
         query = query.filter(Host.id.in_(ids_list))
-    elif target_type == "group":
-        group_id = request.form.get("group_id")
-        if not group_id:
-            flash("Не выбрана целевая группа.", "danger")
-            return redirect(url_for("user_ops_view"))
-        query = query.filter_by(group_id=int(group_id))
+    else: # 'all' or fallback
+        if current_user.is_linux_admin:
+            query = query.filter_by(os_type="linux")
+        elif current_user.is_windows_admin:
+            query = query.filter_by(os_type="windows")
+        elif target_os in ("linux", "windows"):
+            query = query.filter_by(os_type=target_os)
 
     # Exclude Custom Groups if specified
     exclude_custom_group_ids = request.form.getlist("exclude_custom_group_ids")
@@ -1139,10 +1240,19 @@ def run_user_ops():
         if int_cids:
             query = query.filter(~Host.custom_groups.any(CustomGroup.id.in_(int_cids)))
 
-    if target_os in ("linux", "windows"):
-        query = query.filter_by(os_type=target_os)
-
     target_hosts = query.all()
+
+    # Safety checks on selected hosts
+    if current_user.is_linux_admin:
+        non_linux = [h for h in target_hosts if h.os_type != "linux"]
+        if non_linux:
+            flash(f"Защита от дурака: хост «{non_linux[0].name}» является Windows-сервером. Ваша роль ограничена только Linux.", "danger")
+            return redirect(url_for("user_ops_view"))
+    elif current_user.is_windows_admin:
+        non_win = [h for h in target_hosts if h.os_type != "windows"]
+        if non_win:
+            flash(f"Защита от дурака: хост «{non_win[0].name}» является Linux-сервером. Ваша роль ограничена только Windows.", "danger")
+            return redirect(url_for("user_ops_view"))
 
     # Safety Guard: Exclude Domain Controllers if requested
     exclude_dc = request.form.get("exclude_dc") == "1"
@@ -1245,10 +1355,20 @@ def get_playbook_meta(filename: str):
         meta["mtime"] = 0
         meta["is_recent"] = False
 
+    target_os = None
+    content_raw = ""
     try:
         with open(playbook_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        data = yaml.safe_load(content)
+            content_raw = f.read()
+
+        # Check for explicit header directive: # target_os: linux | windows | all
+        for line in content_raw.splitlines()[:15]:
+            m = re.match(r"^\s*#\s*target_os\s*:\s*([a-zA-Z]+)", line, re.IGNORECASE)
+            if m:
+                target_os = m.group(1).lower()
+                break
+
+        data = yaml.safe_load(content_raw)
         if isinstance(data, list) and len(data) > 0:
             first_play = data[0] if isinstance(data[0], dict) else {}
             play_name = first_play.get("name")
@@ -1263,6 +1383,27 @@ def get_playbook_meta(filename: str):
         pass
 
     fn = filename.lower()
+    if not target_os:
+        if fn in ("ping_check.yml", "user_create.yml", "user_delete.yml"):
+            target_os = "all"
+        elif fn.startswith("win_") or "windows" in fn or "win_disable" in fn or "win_audit" in fn:
+            target_os = "windows"
+        elif fn in ("system_update.yml", "service_restart.yml", "disk_space_audit.yml", "docker_cleanup.yml"):
+            target_os = "linux"
+        else:
+            if "win_" in content_raw or "powershell" in content_raw.lower():
+                target_os = "windows"
+            else:
+                target_os = "linux"
+
+    meta["target_os"] = target_os
+    if target_os == "windows":
+        meta["os_badge"] = '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-sky-950 text-sky-300 border border-sky-800 shrink-0"><i class="fa-brands fa-windows mr-1 text-sky-400"></i>Windows</span>'
+    elif target_os == "linux":
+        meta["os_badge"] = '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-950 text-amber-300 border border-amber-800 shrink-0"><i class="fa-brands fa-linux mr-1 text-amber-400"></i>Linux</span>'
+    else:
+        meta["os_badge"] = '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-300 border border-slate-700 shrink-0"><i class="fa-solid fa-globe mr-1 text-emerald-400"></i>Все ОС</span>'
+
     if fn == "ping_check.yml":
         meta["title"] = "Быстрая проверка доступности SSH"
         meta["description"] = "Экспресс-тест SSH подключения ко всем серверам без выполнения тяжелых модулей."
@@ -1337,16 +1478,32 @@ def playbooks_view():
 
 @app.route("/playbooks/new")
 @login_required
-@admin_required
+@playbook_create_required
 def playbook_new():
-    sample_content = """---
-- name: Custom Automation Playbook
+    default_os = "windows" if current_user.is_windows_admin else "linux"
+    if default_os == "windows":
+        sample_content = """# target_os: windows
+---
+- name: Custom Windows Automation
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Test connectivity & Echo on Windows
+      ansible.windows.win_powershell:
+        script: |
+          Write-Output "Running on Windows host: $env:COMPUTERNAME"
+"""
+    else:
+        sample_content = """# target_os: linux
+---
+- name: Custom Linux Automation
   hosts: all
   gather_facts: false
   become: true
 
   tasks:
-    - name: Test connectivity & Echo
+    - name: Test connectivity & Echo on Linux
       ansible.builtin.debug:
         msg: "Running task on host: {{ inventory_hostname }}"
 """
@@ -1355,19 +1512,30 @@ def playbook_new():
         is_new=True,
         is_system=False,
         filename="custom_task.yml",
-        content=sample_content
+        content=sample_content,
+        target_os=default_os
     )
 
 
 @app.route("/playbooks/<path:filename>/edit")
 @login_required
-@admin_required
+@playbook_create_required
 def playbook_edit(filename):
     clean_filename = os.path.basename(filename)
     file_path = os.path.join(PLAYBOOKS_DIR, clean_filename)
     if not os.path.exists(file_path):
         flash(f"Плейбук «{clean_filename}» не найден.", "danger")
         return redirect(url_for("playbooks_view"))
+
+    meta = get_playbook_meta(clean_filename)
+    if not current_user.is_admin:
+        if current_user.is_linux_admin and meta["target_os"] == "windows":
+            flash("У вас нет прав на редактирование Windows-плейбуков.", "danger")
+            return redirect(url_for("playbooks_view"))
+        if current_user.is_windows_admin and meta["target_os"] == "linux":
+            flash("У вас нет прав на редактирование Linux-плейбуков.", "danger")
+            return redirect(url_for("playbooks_view"))
+
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
     is_system = clean_filename in SYSTEM_PLAYBOOKS
@@ -1376,18 +1544,28 @@ def playbook_edit(filename):
         is_new=False,
         is_system=is_system,
         filename=clean_filename,
-        content=content
+        content=content,
+        target_os=meta.get("target_os", "linux")
     )
 
 
 @app.route("/playbooks/save", methods=["POST"])
 @login_required
-@admin_required
+@playbook_create_required
 def playbook_save():
     is_new = request.form.get("is_new") == "true"
     orig_filename = os.path.basename(request.form.get("original_filename", "").strip())
     filename = os.path.basename(request.form.get("filename", "").strip())
     content = request.form.get("content", "")
+    target_os = request.form.get("target_os", "linux").lower()
+
+    if current_user.is_linux_admin:
+        target_os = "linux"
+    elif current_user.is_windows_admin:
+        target_os = "windows"
+    elif not current_user.is_admin:
+        flash("У вас нет прав на сохранение плейбуков.", "danger")
+        return redirect(url_for("playbooks_view"))
 
     if not filename.endswith(".yml") and not filename.endswith(".yaml"):
         filename += ".yml"
@@ -1409,19 +1587,25 @@ def playbook_save():
             is_new=is_new,
             is_system=(filename in SYSTEM_PLAYBOOKS),
             filename=filename,
-            content=content
+            content=content,
+            target_os=target_os
         )
+
+    # Ensure target_os directive is placed/updated in file header
+    lines = content.splitlines()
+    filtered_lines = [l for l in lines if not re.match(r"^\s*#\s*target_os\s*:", l, re.IGNORECASE)]
+    final_content = f"# target_os: {target_os}\n" + "\n".join(filtered_lines) + "\n"
 
     os.makedirs(PLAYBOOKS_DIR, exist_ok=True)
     target_path = os.path.join(PLAYBOOKS_DIR, filename)
     with open(target_path, "w", encoding="utf-8") as f:
-        f.write(content)
+        f.write(final_content)
 
     audit = AuditLog(
         user_id=current_user.id,
         action="PLAYBOOK_SAVE",
         target=filename,
-        description=f"{'Создан' if is_new else 'Отредактирован'} плейбук {filename}"
+        description=f"{'Создан' if is_new else 'Отредактирован'} плейбук {filename} (ОС: {target_os})"
     )
     db.session.add(audit)
     db.session.commit()
@@ -1432,12 +1616,24 @@ def playbook_save():
 
 @app.route("/playbooks/<path:filename>/delete", methods=["POST"])
 @login_required
-@admin_required
+@playbook_create_required
 def playbook_delete(filename):
     clean_filename = os.path.basename(filename)
     if clean_filename in SYSTEM_PLAYBOOKS:
         flash(f"Плейбук «{clean_filename}» является системным и защищен от удаления!", "danger")
         return redirect(url_for("playbooks_view"))
+
+    meta = get_playbook_meta(clean_filename)
+    if not current_user.is_admin:
+        if current_user.is_linux_admin and meta["target_os"] != "linux":
+            flash("Linux-специалист может удалять только Linux-плейбуки.", "danger")
+            return redirect(url_for("playbooks_view"))
+        elif current_user.is_windows_admin and meta["target_os"] != "windows":
+            flash("Windows-специалист может удалять только Windows-плейбуки.", "danger")
+            return redirect(url_for("playbooks_view"))
+        elif not current_user.can_create_playbooks:
+            flash("У вас нет прав на удаление плейбуков.", "danger")
+            return redirect(url_for("playbooks_view"))
 
     file_path = os.path.join(PLAYBOOKS_DIR, clean_filename)
     if os.path.exists(file_path):
@@ -1490,6 +1686,7 @@ def api_playbook_validate():
 
 @app.route("/playbooks/<path:filename>/run")
 @login_required
+@write_required
 def playbook_run(filename):
     clean_filename = os.path.basename(filename)
     file_path = os.path.join(PLAYBOOKS_DIR, clean_filename)
@@ -1498,9 +1695,16 @@ def playbook_run(filename):
         return redirect(url_for("playbooks_view"))
 
     meta = get_playbook_meta(clean_filename)
-    all_hosts = Host.query.order_by(Host.name.asc()).all()
+    if not current_user.can_run_playbook(clean_filename, meta["target_os"]):
+        flash("У вашей роли нет прав на запуск данного сценария.", "danger")
+        return redirect(url_for("playbooks_view"))
+
+    all_hosts = Host.query.filter_by(is_enabled=True).order_by(Host.name.asc()).all()
     groups = HostGroup.query.order_by(HostGroup.name.asc()).all()
     credential_profiles = CredentialProfile.query.order_by(CredentialProfile.os_type, CredentialProfile.is_default.desc(), CredentialProfile.name).all()
+
+    linux_hosts_count = sum(1 for h in all_hosts if h.os_type == 'linux')
+    windows_hosts_count = sum(1 for h in all_hosts if h.os_type == 'windows')
 
     return render_template(
         "playbook_run.html",
@@ -1509,14 +1713,19 @@ def playbook_run(filename):
         playbook_title=meta["title"],
         playbook_description=meta["description"],
         tasks_count=meta["tasks_count"],
+        meta=meta,
+        target_os=meta["target_os"],
         all_hosts=all_hosts,
         groups=groups,
-        credential_profiles=credential_profiles
+        credential_profiles=credential_profiles,
+        linux_hosts_count=linux_hosts_count,
+        windows_hosts_count=windows_hosts_count
     )
 
 
 @app.route("/playbooks/<path:filename>/run", methods=["POST"], endpoint="playbook_run_post")
 @login_required
+@write_required
 def playbook_run_post(filename):
     clean_filename = os.path.basename(filename)
     file_path = os.path.join(PLAYBOOKS_DIR, clean_filename)
@@ -1524,8 +1733,13 @@ def playbook_run_post(filename):
         flash(f"Плейбук «{clean_filename}» не найден.", "danger")
         return redirect(url_for("playbooks_view"))
 
+    meta = get_playbook_meta(clean_filename)
+    if not current_user.can_run_playbook(clean_filename, meta["target_os"]):
+        flash("У вашей роли нет прав на запуск данного сценария.", "danger")
+        return redirect(url_for("playbooks_view"))
+
     target_type = request.form.get("target_type", "all")
-    target_os = request.form.get("target_os", "linux")
+    target_os = request.form.get("target_os", meta["target_os"] if meta["target_os"] != "all" else "linux")
     extra_vars_raw = request.form.get("extra_vars_json", "").strip()
 
     extra_vars = {}
@@ -1583,8 +1797,36 @@ def playbook_run_post(filename):
     if cred_profile_id and cred_profile_id.isdigit():
         extra_vars["_credential_profile_id"] = int(cred_profile_id)
 
-    query = Host.query
-    if target_type == "preselected":
+    query = Host.query.filter_by(is_enabled=True)
+    if target_type == "linux":
+        if not current_user.can_run_on_os("linux"):
+            flash("Защита от дурака: у вашей роли нет прав на запуск задач на Linux-серверах.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        if meta["target_os"] == "windows":
+            flash("Защита от дурака: данный сценарий предназначен исключительно для Windows.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        query = query.filter_by(os_type="linux")
+    elif target_type == "windows":
+        if not current_user.can_run_on_os("windows"):
+            flash("Защита от дурака: у вашей роли нет прав на запуск задач на Windows-серверах.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        if meta["target_os"] == "linux":
+            flash("Защита от дурака: данный сценарий предназначен исключительно для Linux.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        query = query.filter_by(os_type="windows")
+    elif target_type == "group":
+        group_id = request.form.get("group_id")
+        if not group_id:
+            flash("Не выбрана целевая группа.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+        query = query.filter_by(group_id=int(group_id))
+        if current_user.is_linux_admin or meta["target_os"] == "linux":
+            query = query.filter_by(os_type="linux")
+        elif current_user.is_windows_admin or meta["target_os"] == "windows":
+            query = query.filter_by(os_type="windows")
+        elif target_os in ("linux", "windows"):
+            query = query.filter_by(os_type=target_os)
+    elif target_type == "preselected":
         selected_ids = request.form.getlist("selected_hosts")
         if not selected_ids:
             flash("Не выбрано ни одного сервера для запуска.", "danger")
@@ -1597,23 +1839,43 @@ def playbook_run_post(filename):
             flash("Список выбранных серверов пуст.", "danger")
             return redirect(url_for("playbook_run", filename=clean_filename))
         query = query.filter(Host.id.in_(int_ids))
-    elif target_type == "group":
-        group_id = request.form.get("group_id")
-        if not group_id:
-            flash("Не выбрана целевая группа.", "danger")
-            return redirect(url_for("playbook_run", filename=clean_filename))
-        query = query.filter_by(group_id=int(group_id))
-
-    if target_os in ("linux", "windows"):
-        query = query.filter_by(os_type=target_os)
+    else: # 'all' or fallback
+        if current_user.is_linux_admin or meta["target_os"] == "linux":
+            query = query.filter_by(os_type="linux")
+        elif current_user.is_windows_admin or meta["target_os"] == "windows":
+            query = query.filter_by(os_type="windows")
+        elif target_os in ("linux", "windows"):
+            query = query.filter_by(os_type=target_os)
 
     target_hosts = query.all()
     if not target_hosts:
         flash("Не найдено серверов, соответствующих критериям фильтрации.", "warning")
         return redirect(url_for("playbook_run", filename=clean_filename))
 
+    # Strict role & OS validation for preselected hosts
+    if current_user.is_linux_admin:
+        non_linux = [h for h in target_hosts if h.os_type != "linux"]
+        if non_linux:
+            flash(f"Защита от дурака: хост «{non_linux[0].name}» является Windows-сервером. Ваша роль ограничена только Linux.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+    elif current_user.is_windows_admin:
+        non_win = [h for h in target_hosts if h.os_type != "windows"]
+        if non_win:
+            flash(f"Защита от дурака: хост «{non_win[0].name}» является Linux-сервером. Ваша роль ограничена только Windows.", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+
+    if meta["target_os"] == "linux":
+        non_linux = [h for h in target_hosts if h.os_type != "linux"]
+        if non_linux:
+            flash(f"Сценарий предназначен только для Linux, но выбран хост «{non_linux[0].name}» ({non_linux[0].os_type}).", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+    elif meta["target_os"] == "windows":
+        non_win = [h for h in target_hosts if h.os_type != "windows"]
+        if non_win:
+            flash(f"Сценарий предназначен только для Windows, но выбран хост «{non_win[0].name}» ({non_win[0].os_type}).", "danger")
+            return redirect(url_for("playbook_run", filename=clean_filename))
+
     host_ids = [h.id for h in target_hosts]
-    meta = get_playbook_meta(clean_filename)
     summary = f"Сценарий «{meta['title']}» ({clean_filename}) на {len(host_ids)} серверах"
 
     task_id = dispatch_task(
@@ -1748,6 +2010,7 @@ def api_task_status(task_id):
 
 @app.route("/tasks/<int:task_id>/cancel", methods=["POST"])
 @login_required
+@write_required
 def cancel_task_view(task_id):
     from task_engine import cancel_task
     task = db.get_or_404(TaskJob, task_id)
@@ -1786,11 +2049,21 @@ def get_failed_hosts_for_task(task):
 
 @app.route("/tasks/<int:task_id>/retry-failed", methods=["POST"])
 @login_required
+@write_required
 def task_retry_failed(task_id):
     task = db.get_or_404(TaskJob, task_id)
     failed_hosts = get_failed_hosts_for_task(task)
     if not failed_hosts:
         flash("Не удалось автоматически определить список хостов с ошибками.", "warning")
+        return redirect(url_for("task_detail", task_id=task.id))
+
+    if current_user.is_linux_admin:
+        failed_hosts = [h for h in failed_hosts if h.os_type == "linux"]
+    elif current_user.is_windows_admin:
+        failed_hosts = [h for h in failed_hosts if h.os_type == "windows"]
+
+    if not failed_hosts:
+        flash("Среди серверов с ошибками нет хостов, доступных для вашей роли.", "warning")
         return redirect(url_for("task_detail", task_id=task.id))
 
     host_ids = [h.id for h in failed_hosts]
@@ -1877,11 +2150,21 @@ def task_retry_failed(task_id):
 
 @app.route("/tasks/<int:task_id>/open-failed-in-user-ops", methods=["POST"])
 @login_required
+@write_required
 def task_open_failed_in_user_ops(task_id):
     task = db.get_or_404(TaskJob, task_id)
     failed_hosts = get_failed_hosts_for_task(task)
     if not failed_hosts:
         flash("Не найдено хостов с ошибками.", "warning")
+        return redirect(url_for("task_detail", task_id=task.id))
+
+    if current_user.is_linux_admin:
+        failed_hosts = [h for h in failed_hosts if h.os_type == "linux"]
+    elif current_user.is_windows_admin:
+        failed_hosts = [h for h in failed_hosts if h.os_type == "windows"]
+
+    if not failed_hosts:
+        flash("Среди серверов с ошибками нет хостов, доступных для вашей роли.", "warning")
         return redirect(url_for("task_detail", task_id=task.id))
 
     meta_parsed = {}
@@ -1908,17 +2191,27 @@ def task_open_failed_in_user_ops(task_id):
 
     selected_host_ids = [str(h.id) for h in failed_hosts]
     groups = HostGroup.query.order_by(HostGroup.name).all()
-    all_hosts_count = Host.query.filter_by(is_enabled=True).count()
+    custom_groups = CustomGroup.query.order_by(CustomGroup.is_system.desc(), CustomGroup.name).all()
+    all_hosts = Host.query.filter_by(is_enabled=True).order_by(Host.name.asc()).all()
+    all_hosts_count = len(all_hosts)
+    linux_hosts_count = sum(1 for h in all_hosts if h.os_type == 'linux')
+    windows_hosts_count = sum(1 for h in all_hosts if h.os_type == 'windows')
     staff_members = StaffMember.query.filter_by(is_active=True).order_by(StaffMember.name).all()
+    credential_profiles = CredentialProfile.query.order_by(CredentialProfile.os_type, CredentialProfile.is_default.desc(), CredentialProfile.name).all()
 
     return render_template(
         "user_ops.html",
         groups=groups,
+        custom_groups=custom_groups,
+        all_hosts=all_hosts,
         all_hosts_count=all_hosts_count,
+        linux_hosts_count=linux_hosts_count,
+        windows_hosts_count=windows_hosts_count,
         selected_host_ids=selected_host_ids,
         selected_group_id="",
         staff_members=staff_members,
-        selected_staff_ids=selected_staff_ids
+        selected_staff_ids=selected_staff_ids,
+        credential_profiles=credential_profiles
     )
 
 
@@ -2200,6 +2493,32 @@ def reset_user_password():
     db.session.commit()
 
     flash(f"Пароль для пользователя «{user.username}» успешно обновлен.", "success")
+    return redirect(url_for("users_view"))
+
+
+@app.route("/users/update-role", methods=["POST"])
+@login_required
+@admin_required
+def update_user_role():
+    user_id = request.form.get("user_id")
+    new_role = request.form.get("role", "").strip()
+    if not user_id or not new_role:
+        flash("Некорректные параметры изменения роли.", "danger")
+        return redirect(url_for("users_view"))
+
+    valid_roles = {"admin", "linux_admin", "windows_admin", "operator", "auditor"}
+    if new_role not in valid_roles:
+        flash("Указана недопустимая роль пользователя.", "danger")
+        return redirect(url_for("users_view"))
+
+    user = db.get_or_404(User, int(user_id))
+    if user.id == current_user.id and new_role != "admin":
+        flash("Вы не можете понизить роль своей собственной учетной записи.", "danger")
+        return redirect(url_for("users_view"))
+
+    user.role = new_role
+    db.session.commit()
+    flash(f"Роль пользователя «{user.username}» успешно изменена на «{user.role_title}».", "success")
     return redirect(url_for("users_view"))
 
 @app.route("/users/<int:user_id>/delete", methods=["POST"])

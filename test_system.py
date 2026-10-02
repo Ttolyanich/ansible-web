@@ -448,6 +448,110 @@ bad-server                 : ok=2    changed=1    unreachable=0    failed=0    s
     assert m is not None and m.group(1).strip() == "Zabbix server"
     print("  [OK] Recap parsing handles spaces and multi-pass logs cleanly without spurious host entries.")
 
+def test_rbac_and_roles():
+    print("\n--- 12. Testing RBAC, Roles & Permission Enforcement ---")
+    from app import app, db
+    from models import User, Host, HostGroup
+
+    with app.app_context():
+        # 1. Test role properties on User model
+        u_admin = User(username="test_admin", role="admin")
+        u_linux = User(username="test_linux", role="linux_admin")
+        u_win = User(username="test_win", role="windows_admin")
+        u_op = User(username="test_op", role="operator")
+        u_audit = User(username="test_audit", role="auditor")
+
+        # Admin
+        assert u_admin.is_admin and not u_admin.is_read_only
+        assert u_admin.can_manage_linux and u_admin.can_manage_windows
+        assert u_admin.can_create_playbooks and u_admin.can_run_on_os("linux") and u_admin.can_run_on_os("windows")
+        assert u_admin.can_run_playbook("linux") and u_admin.can_run_playbook("windows") and u_admin.can_run_playbook("all")
+
+        # Linux Admin
+        assert u_linux.is_linux_admin and not u_linux.is_admin and not u_linux.is_read_only
+        assert u_linux.can_manage_linux and not u_linux.can_manage_windows
+        assert u_linux.can_create_playbooks and u_linux.can_run_on_os("linux") and not u_linux.can_run_on_os("windows")
+        assert u_linux.can_run_playbook("linux") and not u_linux.can_run_playbook("windows") and u_linux.can_run_playbook("all")
+
+        # Windows Admin
+        assert u_win.is_windows_admin and not u_win.is_admin and not u_win.is_read_only
+        assert not u_win.can_manage_linux and u_win.can_manage_windows
+        assert u_win.can_create_playbooks and not u_win.can_run_on_os("linux") and u_win.can_run_on_os("windows")
+        assert not u_win.can_run_playbook("linux") and u_win.can_run_playbook("windows") and u_win.can_run_playbook("all")
+
+        # Operator (Novice)
+        assert u_op.is_operator and not u_op.is_admin and not u_op.is_read_only
+        assert u_op.can_manage_linux and u_op.can_manage_windows
+        assert not u_op.can_create_playbooks
+        assert u_op.can_run_playbook("linux") and u_op.can_run_playbook("windows") and u_op.can_run_playbook("all")
+
+        # Auditor (Read-Only)
+        assert u_audit.is_auditor and u_audit.is_read_only
+        assert not u_audit.can_manage_linux and not u_audit.can_manage_windows
+        assert not u_audit.can_create_playbooks
+        assert not u_audit.can_run_playbook("linux") and not u_audit.can_run_playbook("windows")
+
+        print("  [OK] Model role properties and permission checks verified.")
+
+        # 2. Test Flask route protection via test_client
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        client = app.test_client()
+
+        # Helper to login as specific user
+        def login_as(role_name, username):
+            client.get('/logout', follow_redirects=True)
+            u = User.query.filter_by(username=username).first()
+            if not u:
+                u = User(username=username, role=role_name)
+                u.set_password("pass123")
+                db.session.add(u)
+                db.session.commit()
+            else:
+                u.role = role_name
+                db.session.commit()
+            res = client.post('/login', data={'username': username, 'password': 'pass123'}, follow_redirects=True)
+            assert res.status_code == 200, f"Login failed for {username}"
+            return u
+
+        # Test Auditor blocked on mutation endpoints (redirected with read-only warning)
+        login_as("auditor", "rbac_audit_user")
+        res = client.post('/user-ops/run', data={'operation': 'create'}, follow_redirects=True)
+        assert "только чтение" in res.data.decode("utf-8") or "Аудитора" in res.data.decode("utf-8"), "Auditor must be blocked on user-ops run"
+
+        res = client.post('/playbooks/ping_check.yml/run', data={'target_type': 'linux'}, follow_redirects=True)
+        assert "только чтение" in res.data.decode("utf-8") or "Аудитора" in res.data.decode("utf-8"), "Auditor must be blocked on playbook run"
+
+        res = client.get('/playbooks/new', follow_redirects=True)
+        assert "нет прав на создание" in res.data.decode("utf-8"), "Auditor must be blocked on playbook new"
+
+        # Test Operator blocked from creating/saving playbooks
+        login_as("operator", "rbac_op_user")
+        res = client.get('/playbooks/new', follow_redirects=True)
+        assert "нет прав на создание" in res.data.decode("utf-8"), "Operator must be blocked on playbook new"
+
+        res = client.post('/playbooks/save', data={'filename': 'hacked.yml', 'content': 'test'}, follow_redirects=True)
+        assert "нет прав на создание" in res.data.decode("utf-8"), "Operator must be blocked on playbook save"
+
+        # Test Operator blocked from permanent_delete (purge)
+        res = client.post('/user-ops/run', data={'operation': 'delete', 'permanent_delete': '1', 'usernames': 'testuser', 'target_type': 'linux'}, follow_redirects=True)
+        assert "Оператор" in res.data.decode("utf-8") and "запрещено" in res.data.decode("utf-8"), "Operator purge lockout must trigger error"
+
+        # Test Linux Admin blocked from running Windows playbooks
+        login_as("linux_admin", "rbac_linux_user")
+        res = client.post('/playbooks/win_disable_inactive_users.yml/run', data={'target_type': 'windows'}, follow_redirects=True)
+        assert "Защита от дурака" in res.data.decode("utf-8") or "нет прав на запуск" in res.data.decode("utf-8"), "Linux Admin must be blocked from Windows run"
+
+        # Test Admin can change user roles via /users/update-role
+        login_as("admin", "rbac_admin_user")
+        target_u = User.query.filter_by(username="rbac_op_user").first()
+        res = client.post('/users/update-role', data={'user_id': target_u.id, 'role': 'auditor'}, follow_redirects=True)
+        assert res.status_code == 200
+        db.session.refresh(target_u)
+        assert target_u.role == "auditor", f"Role update failed, got {target_u.role}"
+
+        print("  [OK] Endpoint access control and fail-close security checks passed.")
+
 if __name__ == "__main__":
     try:
         test_syntax()
@@ -461,6 +565,7 @@ if __name__ == "__main__":
         test_ssh_key_normalization_and_ping_escalation()
         test_audit_security_fixes()
         test_recap_and_failed_host_parsing()
+        test_rbac_and_roles()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")

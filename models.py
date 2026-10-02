@@ -83,6 +83,94 @@ class User(UserMixin, db.Model):
     def is_admin(self) -> bool:
         return self.role == "admin"
 
+    @property
+    def is_linux_admin(self) -> bool:
+        return self.role == "linux_admin"
+
+    @property
+    def is_windows_admin(self) -> bool:
+        return self.role == "windows_admin"
+
+    @property
+    def is_operator(self) -> bool:
+        return self.role == "operator"
+
+    @property
+    def is_auditor(self) -> bool:
+        return self.role == "auditor"
+
+    @property
+    def is_read_only(self) -> bool:
+        return self.role == "auditor"
+
+    @property
+    def can_manage_linux(self) -> bool:
+        return self.role in ("admin", "linux_admin", "operator")
+
+    @property
+    def can_manage_windows(self) -> bool:
+        return self.role in ("admin", "windows_admin", "operator")
+
+    @property
+    def can_create_playbooks(self) -> bool:
+        return self.role in ("admin", "linux_admin", "windows_admin")
+
+    def can_run_on_os(self, os_type: str) -> bool:
+        """Check if user has permission to perform actions on host with given OS."""
+        if self.is_read_only:
+            return False
+        if self.role in ("admin", "operator"):
+            return True
+        os_clean = (os_type or "linux").lower()
+        if self.role == "linux_admin":
+            return os_clean in ("linux", "unknown")
+        if self.role == "windows_admin":
+            return os_clean == "windows"
+        return False
+
+    def can_run_playbook(self, playbook_meta_or_filename, target_os=None) -> bool:
+        """Check if user can run this specific playbook."""
+        if self.is_read_only:
+            return False
+        if self.role in ("admin", "operator"):
+            return True
+        if target_os is not None:
+            resolved_os = str(target_os).lower()
+        elif isinstance(playbook_meta_or_filename, dict):
+            resolved_os = str(playbook_meta_or_filename.get("target_os", "all")).lower()
+        else:
+            resolved_os = str(playbook_meta_or_filename).lower() if playbook_meta_or_filename else "all"
+
+        if resolved_os == "all":
+            return True
+        if self.role == "linux_admin":
+            return resolved_os == "linux"
+        if self.role == "windows_admin":
+            return resolved_os == "windows"
+        return False
+
+    @property
+    def role_title(self) -> str:
+        titles = {
+            "admin": "Глобальный администратор",
+            "linux_admin": "Linux-специалист",
+            "windows_admin": "Windows-специалист",
+            "operator": "Общий оператор",
+            "auditor": "Аудитор"
+        }
+        return titles.get(self.role, self.role.capitalize())
+
+    @property
+    def role_badge_html(self) -> str:
+        badges = {
+            "admin": '<span class="px-2 py-0.5 rounded text-xs bg-purple-950 text-purple-300 border border-purple-800 font-semibold"><i class="fa-solid fa-crown mr-1 text-purple-400"></i>Глобальный админ</span>',
+            "linux_admin": '<span class="px-2 py-0.5 rounded text-xs bg-emerald-950 text-emerald-300 border border-emerald-800 font-semibold"><i class="fa-brands fa-linux mr-1 text-emerald-400"></i>Linux-специалист</span>',
+            "windows_admin": '<span class="px-2 py-0.5 rounded text-xs bg-sky-950 text-sky-300 border border-sky-800 font-semibold"><i class="fa-brands fa-windows mr-1 text-sky-400"></i>Windows-специалист</span>',
+            "operator": '<span class="px-2 py-0.5 rounded text-xs bg-blue-950 text-blue-300 border border-blue-800 font-semibold"><i class="fa-solid fa-play mr-1 text-blue-400"></i>Общий оператор</span>',
+            "auditor": '<span class="px-2 py-0.5 rounded text-xs bg-amber-950 text-amber-300 border border-amber-800 font-semibold"><i class="fa-solid fa-eye mr-1 text-amber-400"></i>Аудитор</span>'
+        }
+        return badges.get(self.role, f'<span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-300">{self.role}</span>')
+
 
 class StaffMember(db.Model):
     __tablename__ = "staff_members"
