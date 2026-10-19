@@ -552,6 +552,73 @@ def test_rbac_and_roles():
 
         print("  [OK] Endpoint access control and fail-close security checks passed.")
 
+def test_ldap_and_auth_features():
+    print("\n--- 13. Testing Active Directory (LDAP) & Domain Auth Features ---")
+    from app import (
+        app, db, _clean_ldap_host, LDAP_CONFIG, login_rate_limited, register_failed_login,
+        LOGIN_MAX_ATTEMPTS
+    )
+    from models import User, LoginRateLimit
+
+    # 1. Test clean ldap host parser
+    host, port, use_ssl = _clean_ldap_host("ldap://10.11.4.254:389")
+    assert host == "10.11.4.254" and port == 389 and use_ssl is False
+    host, port, use_ssl = _clean_ldap_host("ldaps://dc01.corp.local:636")
+    assert host == "dc01.corp.local" and port == 636 and use_ssl is True
+    print("  [OK] _clean_ldap_host parsing verified.")
+
+    with app.app_context():
+        # 2. Test User model LDAP attributes
+        ldap_user = User.query.filter_by(username="ad_test_user").first()
+        if not ldap_user:
+            ldap_user = User(
+                username="ad_test_user",
+                role="admin",
+                auth_source="ldap",
+                display_name="Иванов Иван Иванович",
+                is_active=True
+            )
+            ldap_user.set_password(None)
+            db.session.add(ldap_user)
+            db.session.commit()
+
+        assert ldap_user.is_ldap is True
+        assert ldap_user.display_label == "Иванов Иван Иванович"
+        assert "Active Directory" in ldap_user.auth_source_badge_html
+        assert ldap_user.check_password("any_password") is False, "LDAP user should not authenticate via local hash"
+        print("  [OK] LDAP User model attributes, display_label and badge verified.")
+
+        # 3. Test rate limiting for brute-force protection
+        test_key = "127.0.0.1:test_brute_force"
+        # Clear existing
+        LoginRateLimit.query.filter_by(rate_key=test_key).delete()
+        db.session.commit()
+        assert login_rate_limited(test_key) is False
+
+        for _ in range(LOGIN_MAX_ATTEMPTS):
+            register_failed_login(test_key)
+
+        assert login_rate_limited(test_key) is True, "Rate limiter should trigger after maximum attempts"
+        LoginRateLimit.query.filter_by(rate_key=test_key).delete()
+        db.session.commit()
+        print("  [OK] Login rate limiter and brute-force lockout verified.")
+
+        # 4. Test protection of LDAP user against password reset
+        client = app.test_client()
+        # Login as local admin
+        admin_u = User.query.filter_by(role="admin", auth_source="local").first()
+        with client.session_transaction() as sess:
+            sess['_user_id'] = str(admin_u.id)
+            sess['_fresh'] = True
+
+        res = client.post('/users/reset-password', data={'user_id': ldap_user.id, 'new_password': '123'}, follow_redirects=True)
+        assert "Active Directory" in res.data.decode("utf-8") and "Windows" in res.data.decode("utf-8")
+        print("  [OK] Direct LDAP password reset rejection verified.")
+
+        # Cleanup test user
+        db.session.delete(ldap_user)
+        db.session.commit()
+
 if __name__ == "__main__":
     try:
         test_syntax()
@@ -566,6 +633,7 @@ if __name__ == "__main__":
         test_audit_security_fixes()
         test_recap_and_failed_host_parsing()
         test_rbac_and_roles()
+        test_ldap_and_auth_features()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")

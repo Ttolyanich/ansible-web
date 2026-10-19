@@ -13,15 +13,28 @@
             <p class="text-sm text-slate-400 mt-1">Авторизация для управления инфраструктурой</p>
         </div>
 
+        {% if ldap_enabled %}
+        <div class="p-3 rounded-lg bg-sky-950/60 border border-sky-800/70 text-sky-300 text-xs flex items-start gap-2.5 mb-5">
+            <i class="fa-brands fa-windows text-sky-400 text-base mt-0.5"></i>
+            <div>
+                <span class="font-semibold block text-sky-200">Active Directory / Домен</span>
+                <span class="text-[11px] text-sky-300/80">Вход по доменному логину Windows, корпоративной почте или локальной учетной записи панели.</span>
+            </div>
+        </div>
+        {% endif %}
+
         <form method="POST" action="{{ url_for('login') }}" class="space-y-5">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div>
-                <label for="username" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Имя пользователя</label>
+                <label for="username" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                    {% if ldap_enabled %}Логин или Email{% else %}Имя пользователя{% endif %}
+                </label>
                 <div class="relative">
                     <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400">
                         <i class="fa-solid fa-user"></i>
                     </span>
-                    <input type="text" id="username" name="username" required autofocus placeholder="Логин"
+                    <input type="text" id="username" name="username" required autofocus 
+                           placeholder="{% if ldap_enabled %}ivanov или ivanov@corp.local{% else %}Логин{% endif %}"
                            class="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition">
                 </div>
             </div>

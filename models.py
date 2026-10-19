@@ -68,16 +68,37 @@ class User(UserMixin, db.Model):
     __tablename__ = "users"
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(20), nullable=False, default="operator") # 'admin' or 'operator'
+    password_hash = db.Column(db.String(255), nullable=True) # nullable for LDAP domain users
+    role = db.Column(db.String(20), nullable=False, default="operator") # 'admin', 'linux_admin', 'windows_admin', 'operator', 'auditor'
+    auth_source = db.Column(db.String(20), nullable=False, default="local") # 'local' or 'ldap'
+    display_name = db.Column(db.String(120), nullable=True)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def set_password(self, password: str):
-        self.password_hash = generate_password_hash(password)
+        if password:
+            self.password_hash = generate_password_hash(password)
+        else:
+            self.password_hash = "!ldap_no_local_password"
 
     def check_password(self, password: str) -> bool:
+        if not self.password_hash or self.password_hash.startswith("!") or self.auth_source == "ldap":
+            return False
         return check_password_hash(self.password_hash, password)
+
+    @property
+    def is_ldap(self) -> bool:
+        return self.auth_source == "ldap"
+
+    @property
+    def display_label(self) -> str:
+        return self.display_name or self.username
+
+    @property
+    def auth_source_badge_html(self) -> str:
+        if self.auth_source == "ldap":
+            return '<span class="px-2 py-0.5 rounded text-xs bg-sky-950 text-sky-300 border border-sky-800 font-semibold" title="Авторизация через домен Active Directory"><i class="fa-brands fa-windows mr-1 text-sky-400"></i>Active Directory</span>'
+        return '<span class="px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-300 border border-slate-700 font-medium" title="Локальная учетная запись панели"><i class="fa-solid fa-database mr-1 text-slate-400"></i>Локальный</span>'
 
     @property
     def is_admin(self) -> bool:
@@ -429,3 +450,11 @@ class AuditLog(db.Model):
     description = db.Column(db.Text, nullable=True)
     ip_address = db.Column(db.String(50), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class LoginRateLimit(db.Model):
+    """Track failed login attempts for brute-force protection."""
+    __tablename__ = "login_rate_limits"
+    id = db.Column(db.Integer, primary_key=True)
+    rate_key = db.Column(db.String(100), index=True, nullable=False)
+    attempt_time = db.Column(db.Float, index=True, nullable=False)

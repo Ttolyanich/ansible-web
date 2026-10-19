@@ -24,7 +24,8 @@
             <table class="w-full text-left text-sm text-slate-300">
                 <thead class="bg-slate-950/80 text-slate-400 uppercase text-[11px] tracking-wider border-b border-slate-800">
                     <tr>
-                        <th class="py-3 px-4">Логин</th>
+                        <th class="py-3 px-4">Пользователь / ФИО</th>
+                        <th class="py-3 px-4">Источник</th>
                         <th class="py-3 px-4">Роль</th>
                         <th class="py-3 px-4">Статус</th>
                         <th class="py-3 px-4">Дата создания</th>
@@ -34,12 +35,24 @@
                 <tbody class="divide-y divide-slate-800">
                     {% for u in users %}
                     <tr class="hover:bg-slate-800/40 transition">
-                        <td class="py-3 px-4 font-semibold text-white flex items-center gap-2">
-                            <i class="fa-solid fa-circle-user text-slate-400 text-lg"></i>
-                            <span>{{ u.username }}</span>
-                            {% if u.id == current_user.id %}
-                            <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">Вы</span>
-                            {% endif %}
+                        <td class="py-3 px-4 font-semibold text-white">
+                            <div class="flex items-center gap-2.5">
+                                <i class="fa-solid fa-circle-user text-slate-400 text-xl"></i>
+                                <div>
+                                    <div class="flex items-center gap-1.5">
+                                        <span>{{ u.username }}</span>
+                                        {% if u.id == current_user.id %}
+                                        <span class="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono">Вы</span>
+                                        {% endif %}
+                                    </div>
+                                    {% if u.display_name and u.display_name != u.username %}
+                                    <span class="text-xs text-slate-400 font-normal block">{{ u.display_name }}</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </td>
+                        <td class="py-3 px-4">
+                            {{ u.auth_source_badge_html|safe }}
                         </td>
                         <td class="py-3 px-4">
                             {{ u.role_badge_html|safe }}
@@ -56,9 +69,15 @@
                             <button type="button" onclick="openRoleModal('{{ u.id }}', '{{ u.username }}', '{{ u.role }}')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-indigo-300 text-xs rounded transition" title="Изменить роль">
                                 <i class="fa-solid fa-user-shield"></i> Роль
                             </button>
+                            {% if u.is_ldap %}
+                            <span class="px-2.5 py-1 bg-slate-950 border border-slate-800 text-slate-500 text-xs rounded inline-flex items-center gap-1" title="Учетная запись Active Directory: пароль изменяется в домене Windows">
+                                <i class="fa-brands fa-windows text-[11px] text-sky-500"></i> Пароль в AD
+                            </span>
+                            {% else %}
                             <button type="button" onclick="openResetModal('{{ u.id }}', '{{ u.username }}')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded transition" title="Сбросить пароль">
                                 <i class="fa-solid fa-key"></i> Пароль
                             </button>
+                            {% endif %}
                             {% if u.id != current_user.id %}
                             <form action="{{ url_for('delete_panel_user', user_id=u.id) }}" method="POST" class="inline" onsubmit="return confirm('Удалить пользователя {{ u.username }}?');">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
