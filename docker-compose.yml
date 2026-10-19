@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-5050}:5050"
+    env_file:
+      - .env
     environment:
       - SECRET_KEY=${SECRET_KEY:-}
       - FERNET_KEY=${FERNET_KEY:-}
