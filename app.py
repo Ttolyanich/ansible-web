@@ -333,6 +333,8 @@ def authenticate_ldap(identifier: str, password: str):
             bind_candidates = [bind_user]
             if domain_short and "\\" not in bind_user and "@" not in bind_user:
                 bind_candidates.append(f"{domain_short}\\{bind_user}")
+            if "\\" not in bind_user and "@" not in bind_user:
+                bind_candidates.append(f"ITSP\\{bind_user}")
             if ldap_domain and "@" not in bind_user and "\\" not in bind_user:
                 bind_candidates.append(f"{bind_user}@{ldap_domain}")
 
@@ -375,6 +377,7 @@ def authenticate_ldap(identifier: str, password: str):
                 verify_candidates = [user_dn, user_upn]
                 if domain_short:
                     verify_candidates.append(f"{domain_short}\\{user_sam}")
+                verify_candidates.append(f"ITSP\\{user_sam}")
                 if ldap_domain:
                     verify_candidates.append(f"{user_sam}@{ldap_domain}")
                 verify_candidates.append(user_sam)
@@ -397,6 +400,7 @@ def authenticate_ldap(identifier: str, password: str):
             direct_candidates = [clean_id]
             if domain_short:
                 direct_candidates.append(f"{domain_short}\\{clean_user}")
+            direct_candidates.append(f"ITSP\\{clean_user}")
             if ldap_domain:
                 direct_candidates.append(f"{clean_user}@{ldap_domain}")
             direct_candidates.append(clean_user)
