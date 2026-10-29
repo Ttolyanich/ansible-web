@@ -1393,6 +1393,46 @@ def batch_assign_custom_group():
     return redirect(request.referrer or url_for("hosts_view"))
 
 
+@app.route("/hosts/batch-credential", methods=["POST"])
+@login_required
+@write_required
+def batch_assign_credential():
+    host_ids = request.form.getlist("host_ids")
+    cred_id_raw = request.form.get("credential_id", "").strip()
+
+    if not host_ids:
+        flash("Не выбраны хосты для изменения профиля подключения.", "warning")
+        return redirect(request.referrer or url_for("hosts_view"))
+
+    valid_ids = [int(i) for i in host_ids if str(i).isdigit()]
+    if not valid_ids:
+        flash("Некорректный список хостов.", "warning")
+        return redirect(request.referrer or url_for("hosts_view"))
+
+    new_cred_id = None
+    cred_name = "«По умолчанию» (наследование из группы / ОС)"
+    if cred_id_raw and cred_id_raw.isdigit():
+        new_cred_id = int(cred_id_raw)
+        cp = db.session.get(CredentialProfile, new_cred_id)
+        if not cp:
+            flash("Указанный профиль учетных данных не найден.", "danger")
+            return redirect(request.referrer or url_for("hosts_view"))
+        cred_name = f"«{cp.name}» (пользователь: {cp.ssh_user})"
+
+    hosts = Host.query.filter(Host.id.in_(valid_ids)).all()
+    if current_user.is_linux_admin:
+        hosts = [h for h in hosts if h.os_type == "linux"]
+    elif current_user.is_windows_admin:
+        hosts = [h for h in hosts if h.os_type == "windows"]
+
+    for h in hosts:
+        h.credential_id = new_cred_id
+
+    db.session.commit()
+    flash(f"Профиль подключения {cred_name} успешно установлен для {len(hosts)} хостов.", "success")
+    return redirect(request.referrer or url_for("hosts_view"))
+
+
 @app.route("/staff/service-accounts", methods=["GET", "POST"])
 @login_required
 @admin_required

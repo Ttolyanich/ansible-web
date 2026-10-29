@@ -1015,8 +1015,10 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                         res["matched_auth"] = used_cred["auth_type"]
                         final_results[h.name] = res
 
-                        # Auto-learn: If this profile succeeded, save it directly to host so future tasks need no retry
-                        if used_cred["profile_id"] and h.credential_id != used_cred["profile_id"]:
+                        # Auto-learn: only if explicitly enabled via AUTO_LEARN_CREDENTIALS env var (default: False)
+                        # Prevents one-off tasks from silently overwriting host connection profiles in the database
+                        auto_learn = os.getenv("AUTO_LEARN_CREDENTIALS", "false").lower() in ("true", "1")
+                        if auto_learn and used_cred["profile_id"] and h.credential_id != used_cred["profile_id"]:
                             h.credential_id = used_cred["profile_id"]
                             try:
                                 db.session.commit()

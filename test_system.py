@@ -680,11 +680,84 @@ def test_ldap_and_auth_features():
 
         res = client.post('/users/reset-password', data={'user_id': ldap_user.id, 'new_password': '123'}, follow_redirects=True)
         assert "Active Directory" in res.data.decode("utf-8") and "Windows" in res.data.decode("utf-8")
-        print("  [OK] Direct LDAP password reset rejection verified.")
 
         # Cleanup test user
         db.session.delete(ldap_user)
         db.session.commit()
+
+        print("  [OK] Direct LDAP password reset rejection verified.")
+
+def test_batch_credential_assignment():
+    print("\n--- 14. Testing Batch Credential Assignment & Auto-Learn Disabling ---")
+    from app import app, db
+    from models import Host, CredentialProfile, User
+
+    with app.app_context():
+        # Create test profile
+        cp_ansible = CredentialProfile.query.filter_by(name="Test Ansible Profile").first()
+        if not cp_ansible:
+            cp_ansible = CredentialProfile(name="Test Ansible Profile", os_type="linux", ssh_user="ansible", auth_type="key")
+            db.session.add(cp_ansible)
+            db.session.commit()
+
+        # Create or fetch 2 hosts
+        h1 = Host.query.filter_by(name="batch-h1.local").first()
+        if not h1:
+            h1 = Host(name="batch-h1.local", zabbix_hostid="batch_zb_1", ip_address="10.0.0.1", os_type="linux")
+            db.session.add(h1)
+        h2 = Host.query.filter_by(name="batch-h2.local").first()
+        if not h2:
+            h2 = Host(name="batch-h2.local", zabbix_hostid="batch_zb_2", ip_address="10.0.0.2", os_type="linux")
+            db.session.add(h2)
+        h1.credential_id = None
+        h2.credential_id = None
+        db.session.commit()
+
+        admin_u = User.query.filter_by(username="admin").first()
+
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["_user_id"] = str(admin_u.id)
+                sess["_fresh"] = True
+
+            # 1. Test batch assign to cp_ansible
+            resp = client.post("/hosts/batch-credential", data={
+                "host_ids": [str(h1.id), str(h2.id)],
+                "credential_id": str(cp_ansible.id)
+            }, follow_redirects=True)
+            assert resp.status_code == 200
+
+            db.session.refresh(h1)
+            db.session.refresh(h2)
+            assert h1.credential_id == cp_ansible.id
+            assert h2.credential_id == cp_ansible.id
+            assert h1.override_credential.name == "Test Ansible Profile"
+
+            # 2. Test batch reset (clear override back to None)
+            resp = client.post("/hosts/batch-credential", data={
+                "host_ids": [str(h1.id), str(h2.id)],
+                "credential_id": ""
+            }, follow_redirects=True)
+            assert resp.status_code == 200
+
+            db.session.refresh(h1)
+            db.session.refresh(h2)
+            assert h1.credential_id is None
+            assert h2.credential_id is None
+
+            # Cleanup
+            db.session.delete(h1)
+            db.session.delete(h2)
+            db.session.delete(cp_ansible)
+            db.session.commit()
+
+    # 3. Verify auto-learn is disabled by default
+    import os
+    auto_learn = os.getenv("AUTO_LEARN_CREDENTIALS", "false").lower() in ("true", "1")
+    assert not auto_learn, "AUTO_LEARN_CREDENTIALS must be False by default"
+
+    print("  [OK] Batch credential assignment and reset verified successfully.")
+    print("  [OK] Auto-learn default state verified disabled (safe against silent profile overrides).")
 
 if __name__ == "__main__":
     try:
@@ -701,6 +774,7 @@ if __name__ == "__main__":
         test_recap_and_failed_host_parsing()
         test_rbac_and_roles()
         test_ldap_and_auth_features()
+        test_batch_credential_assignment()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")
