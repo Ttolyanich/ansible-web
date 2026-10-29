@@ -2493,6 +2493,69 @@ def delete_task_view(task_id):
 @login_required
 def task_detail(task_id):
     task = db.get_or_404(TaskJob, task_id)
+    # Self-healing: if task completed with failures but details_json is missing failed hosts
+    if task.failed_count > 0 and task.status in ('failed', 'partial', 'success', 'canceled'):
+        current_details = dict(task.details) if task.details else {}
+        failed_in_details = sum(1 for v in current_details.values() if isinstance(v, dict) and v.get("status") != "ok")
+        if failed_in_details < task.failed_count or len(current_details) < (task.target_count or 0):
+            from task_engine import parse_ansible_recap, extract_host_errors
+            recovered = False
+            log_text = task.log_output or ""
+            log_file = os.path.join(instance_dir, "tasks", f"{task.id}.log")
+            if os.path.exists(log_file):
+                try:
+                    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                        file_log = f.read()
+                        if len(file_log) > len(log_text):
+                            log_text = file_log
+                except Exception:
+                    pass
+
+            if log_text:
+                recap_results = parse_ansible_recap(log_text)
+                host_errors = extract_host_errors(log_text)
+                for h_name, res in recap_results.items():
+                    if res.get("status") != "ok":
+                        if h_name not in current_details or current_details[h_name].get("status") == "ok":
+                            current_details[h_name] = res
+                            recovered = True
+                        elif not current_details[h_name].get("error") and res.get("error"):
+                            current_details[h_name]["error"] = res["error"]
+                            recovered = True
+                for h_name, err in host_errors.items():
+                    if h_name not in current_details:
+                        current_details[h_name] = {
+                            "status": "unreachable" if any(w in err.lower() for w in ["timeout", "refused", "no route", "route"]) else "failed",
+                            "summary": "fatal / failed",
+                            "error": err
+                        }
+                        recovered = True
+                    elif current_details[h_name].get("status") != "ok" and not current_details[h_name].get("error"):
+                        current_details[h_name]["error"] = err
+                        recovered = True
+
+                try:
+                    failed_objs = get_failed_hosts_for_task(task)
+                    for fh in failed_objs:
+                        if fh.name not in current_details:
+                            err_msg = host_errors.get(fh.name) or "Не удалось подключиться (все попытки авторизации исчерпаны)"
+                            current_details[fh.name] = {
+                                "status": "unreachable",
+                                "summary": "Connection failed",
+                                "error": err_msg
+                            }
+                            recovered = True
+                except Exception:
+                    pass
+
+            if recovered:
+                task.details = current_details
+                try:
+                    db.session.commit()
+                except Exception as ex:
+                    db.session.rollback()
+                    logger.warning(f"Could not persist self-healed details for task {task.id}: {ex}")
+
     return render_template("task_detail.html", task=task)
 
 @app.route("/api/tasks/<int:task_id>")
@@ -2542,11 +2605,13 @@ def get_failed_hosts_for_task(task):
                 failed_names.add(name)
 
     if not failed_names and task.log_output:
-        for line in task.log_output.splitlines():
+        ansi_regex = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+        for raw_line in task.log_output.splitlines():
+            line = ansi_regex.sub('', raw_line).strip()
             m = re.match(r'^\s*(.+?)\s*:\s*.*(?:unreachable=[1-9]|failed=[1-9])', line)
             if m:
                 failed_names.add(m.group(1).strip())
-            m_fatal = re.search(r'(?:fatal|unreachable):\s*\[([^\]]+)\]', line)
+            m_fatal = re.search(r'(?:fatal|unreachable|failed):\s*\[([^\]]+)\]', line, re.IGNORECASE)
             if m_fatal:
                 failed_names.add(m_fatal.group(1).strip())
 

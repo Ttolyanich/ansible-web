@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import json
 import yaml
 import shutil
@@ -657,15 +658,15 @@ def generate_inventory(hosts: list, temp_dir: str, db_session, host_creds_map: O
 def extract_host_errors(output: str) -> Dict[str, str]:
     """Extract human-readable error reason per host from Ansible log output."""
     errors = {}
+    ansi_regex = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
     lines = output.splitlines()
-    for line in lines:
-        line_clean = line.strip()
-        if line_clean.startswith("fatal: [") or line_clean.startswith("failed: ["):
+    for raw_line in lines:
+        line_clean = ansi_regex.sub('', raw_line).strip()
+        m = re.search(r'(?:fatal|failed|unreachable):\s*\[([^\]]+)\]:?\s*(.*)', line_clean, re.IGNORECASE)
+        if m:
             try:
-                start_bracket = line_clean.find("[") + 1
-                end_bracket = line_clean.find("]")
-                hostname = line_clean[start_bracket:end_bracket].strip()
-                rest = line_clean[end_bracket+1:]
+                hostname = m.group(1).strip()
+                rest = m.group(2).strip()
 
                 if "Permission denied" in rest:
                     err_text = "Permission denied (проверьте SSH-ключ / пароль)"
@@ -689,7 +690,7 @@ def extract_host_errors(output: str) -> Dict[str, str]:
                     except Exception:
                         err_text = rest[:120]
                 else:
-                    err_text = rest[:120]
+                    err_text = rest[:120] if rest else "Ошибка выполнения задачи"
 
                 errors[hostname] = err_text
             except Exception:
@@ -700,16 +701,17 @@ def extract_host_errors(output: str) -> Dict[str, str]:
 def parse_ansible_recap(output: str) -> Dict[str, Dict[str, Any]]:
     """Parse PLAY RECAP line by line to extract status of each host."""
     results = {}
+    ansi_regex = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
     lines = output.splitlines()
     in_recap = False
     host_errors = extract_host_errors(output)
 
-    for line in lines:
-        if "PLAY RECAP" in line:
+    for raw_line in lines:
+        line_str = ansi_regex.sub('', raw_line).strip()
+        if "PLAY RECAP" in line_str:
             in_recap = True
             continue
         if in_recap:
-            line_str = line.strip()
             if not line_str or line_str.startswith("===") or line_str.startswith("TASK [") or line_str.startswith("PLAY [") or line_str.startswith("["):
                 in_recap = False
                 continue
@@ -806,6 +808,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
         pending_hosts = {h.name: h for h in hosts}
         host_attempt_indices = {h.name: 0 for h in hosts}
         final_results = {}
+        latest_host_results = {}
         aggregated_logs = [task.log_output] if task.log_output else []
 
         # Collect secrets that should never appear in log outputs
@@ -1027,6 +1030,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                             del pending_hosts[h.name]
                     else:
                         # Host failed this pass
+                        latest_host_results[h.name] = res
                         err_text = (res.get("error") or res.get("summary") or "").lower()
                         # Only stop trying if host is definitely dead (no route or closed port)
                         is_dead_host = any(kw in err_text for kw in [
@@ -1036,7 +1040,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                         cands = host_candidates[h.name]
                         next_idx = host_attempt_indices[h.name] + 1
 
-                        if not is_dead_host and next_idx < len(cands):
+                        if not is_dead_host and next_idx < len(cands) and pass_num < max_passes:
                             # Move to next candidate in next pass!
                             host_attempt_indices[h.name] = next_idx
                             next_cand = cands[next_idx]
@@ -1044,7 +1048,7 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
                                 f"[ПОДБОР] Хост '{h.name}': отказ авторизации под '{used_cred['profile_name']}' ({used_cred['user']}, {used_cred['auth_type']}). Следующая попытка: '{next_cand['profile_name']}' ({next_cand['user']}, {next_cand['auth_type']})...\n"
                             )
                         else:
-                            # Dead host OR all candidate profiles exhausted
+                            # Dead host OR all candidate profiles exhausted OR maximum retry passes reached
                             final_results[h.name] = res
                             if h.name in pending_hosts:
                                 del pending_hosts[h.name]
@@ -1057,14 +1061,23 @@ def run_ansible_task(app, task_id: int, playbook_name: str, host_ids: List[int],
 
             pass_num += 1
 
+        # Ensure 100% of target hosts are accounted for in final_results
+        for h in hosts:
+            if h.name not in final_results:
+                final_results[h.name] = latest_host_results.get(h.name, {
+                    "status": "unreachable",
+                    "summary": "No recap returned / connection failed",
+                    "error": "Не удалось подключиться (все попытки авторизации исчерпаны)"
+                })
+
         # Finalize task metrics and update host states
         now = datetime.utcnow()
         success_count = 0
         failed_count = 0
 
         for h in hosts:
-            res = final_results.get(h.name, {"status": "unreachable", "summary": "No recap returned"})
-            if res["status"] == "ok":
+            res = final_results[h.name]
+            if res.get("status") == "ok":
                 success_count += 1
                 if task.task_type == "ping":
                     h.last_status = "online"

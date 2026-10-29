@@ -408,8 +408,10 @@ def test_audit_security_fixes():
 
 def test_recap_and_failed_host_parsing():
     print("\n--- 11. Testing Recap Parsing & Failed Hosts Detection ---")
-    from task_engine import parse_ansible_recap
+    from task_engine import parse_ansible_recap, extract_host_errors
     import re
+    from app import app, db, get_failed_hosts_for_task
+    from models import TaskJob, Host, User
 
     sample_log = """
 === [ПРОХОД 1] Запуск Ansible для 3 хостов с основными профилями ===
@@ -419,34 +421,99 @@ PLAY [Create Administrator Account on Linux & Windows] *************************
 TASK [Normalize target users list] *********************************************
 ok: [server1.example.com]
 ok: [Zabbix server]
-fatal: [bad-server]: UNREACHABLE! => {"changed": false, "msg": "Failed to connect to the host via ssh: Permission denied"}
+fatal: [bad-server]: UNREACHABLE! => {"changed": false, "msg": "Failed to connect to the host via ssh: Permission denied (publickey,password)."}
+fatal: [dead-server]: UNREACHABLE! => {"changed": false, "msg": "Failed to connect to the host via ssh: Connection refused"}
 
 PLAY RECAP *********************************************************************
 server1.example.com        : ok=2    changed=0    unreachable=0    failed=0    skipped=3    rescued=0    ignored=0   
 Zabbix server              : ok=2    changed=0    unreachable=0    failed=0    skipped=3    rescued=0    ignored=0   
 bad-server                 : ok=0    changed=0    unreachable=1    failed=0    skipped=0    rescued=0    ignored=0   
+dead-server                : ok=0    changed=0    unreachable=1    failed=0    skipped=0    rescued=0    ignored=0   
 
 [ПОДБОР] Хост 'bad-server': отказ авторизации под 'Default SSH'. Следующая попытка: 'Alt Profile'...
 
 === [ПРОХОД 2 (АВТО-ПОДБОР)] Повторная попытка для 1 хостов с альтернативными профилями ===
 
+fatal: [bad-server]: UNREACHABLE! => {"changed": false, "msg": "Failed to connect to the host via ssh: Permission denied"}
+
 PLAY RECAP *********************************************************************
-bad-server                 : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
+bad-server                 : ok=0    changed=0    unreachable=1    failed=0    skipped=0    rescued=0    ignored=0   
 """
     recap = parse_ansible_recap(sample_log)
     assert "server1.example.com" in recap, "server1 must be parsed"
     assert "Zabbix server" in recap, "Hostnames with spaces must be parsed in recap"
     assert recap["server1.example.com"]["status"] == "ok"
     assert recap["Zabbix server"]["status"] == "ok"
-    assert recap["bad-server"]["status"] == "ok"
+    assert recap["bad-server"]["status"] == "unreachable"
+    assert "Permission denied" in recap["bad-server"]["error"]
     # Ensure no spurious entries from log comments or task lines
     assert "[ПОДБОР] Хост 'bad-server'" not in recap
+
+    # Test error extraction with ANSI sequences
+    ansi_log = "\x1b[0;31mfatal: [ansi-host.local]: UNREACHABLE! => {\"changed\": false, \"msg\": \"Connection timed out (timeout)\"}\x1b[0m"
+    ansi_errors = extract_host_errors(ansi_log)
+    assert "ansi-host.local" in ansi_errors
+    assert "timed out" in ansi_errors["ansi-host.local"].lower()
 
     # Test regex in get_failed_hosts_for_task for hostnames with spaces
     log_line_space = "Zabbix server : ok=1 changed=0 unreachable=1 failed=0 skipped=0"
     m = re.match(r'^\s*(.+?)\s*:\s*.*(?:unreachable=[1-9]|failed=[1-9])', log_line_space)
     assert m is not None and m.group(1).strip() == "Zabbix server"
-    print("  [OK] Recap parsing handles spaces and multi-pass logs cleanly without spurious host entries.")
+
+    # Test task_detail self-healing for missing failed hosts
+    with app.app_context():
+        # Clean or ensure hosts exist
+        h_good = Host.query.filter_by(name="server1.example.com").first()
+        if not h_good:
+            h_good = Host(name="server1.example.com", zabbix_hostid="test_zb_101", ip_address="192.168.1.10", os_type="linux")
+            db.session.add(h_good)
+        h_bad = Host.query.filter_by(name="bad-server").first()
+        if not h_bad:
+            h_bad = Host(name="bad-server", zabbix_hostid="test_zb_102", ip_address="192.168.1.11", os_type="linux")
+            db.session.add(h_bad)
+        db.session.commit()
+
+        # Simulate a task where details only saved OK host (reproducing the bug reported by user)
+        t = TaskJob(
+            task_type="user_create",
+            summary="Test User Create",
+            target_count=2,
+            success_count=1,
+            failed_count=1,
+            status="partial",
+            details_json=json.dumps({"server1.example.com": {"status": "ok", "summary": "ok=2"}}),
+            log_output=sample_log
+        )
+        db.session.add(t)
+        db.session.commit()
+
+        # Call client to trigger task_detail view
+        with app.test_client() as client:
+            # Login as admin
+            u_admin = User.query.filter_by(username="admin").first()
+            with client.session_transaction() as sess:
+                sess["_user_id"] = str(u_admin.id)
+                sess["_fresh"] = True
+            
+            resp = client.get(f"/tasks/{t.id}")
+            assert resp.status_code == 200
+            html = resp.get_data(as_text=True)
+            # Verify the failed host bad-server is now present in the page!
+            assert "bad-server" in html
+            assert "Unreachable" in html
+            assert "Permission denied" in html
+
+            # Verify database record was self-healed
+            db.session.refresh(t)
+            assert "bad-server" in t.details
+            assert t.details["bad-server"]["status"] == "unreachable"
+
+        # Cleanup
+        db.session.delete(t)
+        db.session.commit()
+
+    print("  [OK] Recap parsing handles spaces, ANSI and multi-pass logs cleanly without spurious host entries.")
+    print("  [OK] Task detail view self-healing successfully recovered missing failed hosts into details_json.")
 
 def test_rbac_and_roles():
     print("\n--- 12. Testing RBAC, Roles & Permission Enforcement ---")

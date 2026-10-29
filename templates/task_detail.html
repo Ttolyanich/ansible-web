@@ -82,13 +82,14 @@
         <!-- Retry Failed Hosts Action Banner -->
         {% if task.failed_count > 0 and task.status in ('failed', 'partial', 'success', 'canceled') %}
         <div class="mt-5 p-4 rounded-xl bg-red-950/40 border border-red-800/80 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
-            <div class="flex items-center gap-3">
-                <div class="w-11 h-11 rounded-lg bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-400 text-lg shrink-0">
-                    <i class="fa-solid fa-rotate-right"></i>
+            <div class="flex items-center gap-3 cursor-pointer group" onclick="filterHostBreakdown('fail'); document.getElementById('hosts-breakdown-card')?.scrollIntoView({behavior: 'smooth'});" title="Нажмите, чтобы просмотреть хосты с ошибками в таблице ниже">
+                <div class="w-11 h-11 rounded-lg bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-400 text-lg shrink-0 group-hover:scale-105 transition">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
                 </div>
                 <div>
                     <div class="text-sm font-bold text-white flex items-center gap-2">
                         <span>Найдено ошибок: <span class="text-red-400 font-mono font-bold">{{ task.failed_count }}</span> хостов</span>
+                        <span class="text-[11px] font-normal text-red-300 bg-red-950/80 px-2 py-0.5 rounded border border-red-800/60 hidden sm:inline group-hover:bg-red-900 transition">показать в таблице ↓</span>
                     </div>
                     <div class="text-xs text-slate-300 mt-0.5">
                         Вы можете повторно запустить операцию только на этих проблемных серверах
@@ -118,21 +119,21 @@
 
         <!-- Host Breakdown Table if available -->
         {% if task.details %}
-        <div class="mt-6">
+        <div class="mt-6" id="hosts-breakdown-card">
             <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
                 <h2 class="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
                     <i class="fa-solid fa-network-wired text-slate-400"></i> Результаты по хостам
                 </h2>
                 <div class="flex items-center gap-2 text-xs">
-                    <button type="button" onclick="filterHostBreakdown('all')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-white font-medium border border-slate-700 transition">
-                        Все ({{ task.details|length }})
+                    <button type="button" id="btn-filter-all" onclick="filterHostBreakdown('all')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-white font-medium border border-slate-700 transition ring-2 ring-indigo-500">
+                        Все ({{ task.target_count if task.target_count and task.target_count > (task.details|length) else task.details|length }})
                     </button>
                     {% if task.failed_count > 0 %}
-                    <button type="button" onclick="filterHostBreakdown('fail')" class="px-2.5 py-1 rounded bg-red-950/80 hover:bg-red-900 text-red-300 font-medium border border-red-800 transition">
+                    <button type="button" id="btn-filter-fail" onclick="filterHostBreakdown('fail')" class="px-2.5 py-1 rounded bg-red-950/80 hover:bg-red-900 text-red-300 font-medium border border-red-800 transition">
                         Ошибки ({{ task.failed_count }})
                     </button>
                     {% endif %}
-                    <button type="button" onclick="filterHostBreakdown('ok')" class="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white font-medium border border-slate-800 transition">
+                    <button type="button" id="btn-filter-ok" onclick="filterHostBreakdown('ok')" class="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white font-medium border border-slate-800 transition">
                         Успех ({{ task.success_count }})
                     </button>
                 </div>
@@ -180,6 +181,11 @@
                             </td>
                         </tr>
                         {% endfor %}
+                        <tr id="no-hosts-match-row" style="display: none;">
+                            <td colspan="3" class="py-6 text-center text-slate-500">
+                                <i class="fa-solid fa-circle-info mr-1"></i> Нет серверов, соответствующих выбранному фильтру
+                            </td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -294,11 +300,32 @@
 
     function filterHostBreakdown(status) {
         const rows = document.querySelectorAll('.host-breakdown-row');
+        let visibleCount = 0;
         rows.forEach(r => {
             if (status === 'all' || r.dataset.status === status) {
                 r.style.display = '';
+                visibleCount++;
             } else {
                 r.style.display = 'none';
+            }
+        });
+
+        const noMatch = document.getElementById('no-hosts-match-row');
+        if (noMatch) {
+            noMatch.style.display = visibleCount === 0 ? '' : 'none';
+        }
+
+        const buttons = {
+            'all': document.getElementById('btn-filter-all'),
+            'fail': document.getElementById('btn-filter-fail'),
+            'ok': document.getElementById('btn-filter-ok')
+        };
+        Object.entries(buttons).forEach(([k, btn]) => {
+            if (!btn) return;
+            if (k === status) {
+                btn.classList.add('ring-2', 'ring-indigo-500');
+            } else {
+                btn.classList.remove('ring-2', 'ring-indigo-500');
             }
         });
     }
