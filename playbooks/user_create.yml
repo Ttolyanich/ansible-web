@@ -26,6 +26,10 @@
           adduser -D -s /bin/bash "{{ u.username }}" 2>/dev/null || \
           adduser -D "{{ u.username }}" 2>/dev/null || true
         fi
+        if ! id "{{ u.username }}" >/dev/null 2>&1; then
+          echo "CRITICAL: Не удалось создать пользователя '{{ u.username }}' (проверьте права root, тип ОС хоста и доступность файловой системы)" >&2
+          exit 1
+        fi
         {% if u.password is defined and u.password | length > 0 %}
         echo "{{ (u.username ~ ':' ~ u.password) | b64encode }}" | base64 -d | chpasswd 2>/dev/null || echo "{{ u.password | b64encode }}" | base64 -d | passwd --stdin "{{ u.username }}" 2>/dev/null || true
         {% endif %}
@@ -109,7 +113,7 @@
         {% for u in effective_users %}
         {% if u.sudo | default(true) | bool %}
         rm -f "/etc/sudoers.d/{{ u.username }}" 2>/dev/null || true
-        echo "{{ u.username }} ALL=(ALL:ALL) NOPASSWD:ALL" > "/etc/sudoers.d/{{ u.username | replace('.', '_') }}" && chmod 0440 "/etc/sudoers.d/{{ u.username | replace('.', '_') }}"
+        (echo "{{ u.username }} ALL=(ALL:ALL) NOPASSWD:ALL" > "/etc/sudoers.d/{{ u.username | replace('.', '_') }}" && chmod 0440 "/etc/sudoers.d/{{ u.username | replace('.', '_') }}") 2>/dev/null || true
         usermod -a -G sudo "{{ u.username }}" 2>/dev/null || usermod -a -G wheel "{{ u.username }}" 2>/dev/null || true
         {% endif %}
         {% endfor %}
@@ -117,7 +121,6 @@
       register: linux_provision_res
       changed_when: false
       failed_when: linux_provision_res.rc != 0
-      no_log: "{{ (effective_users | map(attribute='password') | select('defined') | select('truthy') | list | length) > 0 }}"
 
     # -------------------------------------------------------------
     # WINDOWS TARGETS (via OpenSSH)
