@@ -223,30 +223,6 @@ def get_candidate_credentials(host, db_session, explicit_profile_id: Optional[in
         raw_pass = (prof.password or "").strip() if prof else ""
         raw_passphrase = (prof.passphrase or "").strip() if prof else ""
 
-        # Auto-detect private key from host/system locations if profile has no key in DB
-        if not raw_key:
-            possible_key_paths = [
-                os.path.join(os.path.dirname(__file__), "instance", "id_ed25519"),
-                os.path.join(os.path.dirname(__file__), "instance", "id_rsa"),
-                os.path.join(os.path.dirname(__file__), "instance", "ansible_id_ed25519"),
-                "/app/instance/id_ed25519",
-                "/app/instance/id_rsa",
-                os.path.expanduser("~/.ssh/id_ed25519"),
-                os.path.expanduser("~/.ssh/id_rsa"),
-                "/root/.ssh/id_ed25519",
-                "/root/.ssh/id_rsa"
-            ]
-            for kp in possible_key_paths:
-                if os.path.exists(kp) and os.path.isfile(kp):
-                    try:
-                        with open(kp, "r", encoding="utf-8") as kf:
-                            cand = kf.read().strip()
-                            if cand.startswith("-----BEGIN"):
-                                raw_key = cand
-                                break
-                    except Exception:
-                        pass
-
         # Validate key format
         key_valid = False
         if raw_key:
