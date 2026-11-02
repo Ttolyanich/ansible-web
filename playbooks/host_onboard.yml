@@ -1,0 +1,218 @@
+---
+- name: Host Onboarding & Zabbix Agent 2 Deployment
+  hosts: all
+  gather_facts: false
+  become: true
+
+  vars:
+    target_hostname: "{{ host_name | default(inventory_hostname) }}"
+    zabbix_srv: "{{ zabbix_server | default('10.127.8.3') }}"
+
+  tasks:
+    # -------------------------------------------------------------
+    # 1. Package Manager & Sudo Detection / Installation
+    # -------------------------------------------------------------
+    - name: Detect OS package manager and ensure sudo is installed
+      ansible.builtin.raw: >
+        if command -v apt-get >/dev/null 2>&1; then
+          PKG="apt";
+          command -v sudo >/dev/null 2>&1 || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo);
+        elif command -v dnf >/dev/null 2>&1; then
+          PKG="dnf";
+          command -v sudo >/dev/null 2>&1 || dnf install -y sudo;
+        elif command -v yum >/dev/null 2>&1; then
+          PKG="yum";
+          command -v sudo >/dev/null 2>&1 || yum install -y sudo;
+        elif command -v apk >/dev/null 2>&1; then
+          PKG="apk";
+          command -v sudo >/dev/null 2>&1 || apk add sudo;
+        else
+          PKG="unknown";
+        fi;
+        echo "PKG_MGR:$PKG"
+      register: pkg_mgr_res
+      changed_when: false
+
+    - name: Set hostname on target machine
+      ansible.builtin.raw: >
+        hostnamectl set-hostname "{{ target_hostname }}" 2>/dev/null ||
+        echo "{{ target_hostname }}" > /etc/hostname 2>/dev/null || true
+      changed_when: false
+
+    # -------------------------------------------------------------
+    # 2. Setup System Users (Staff Members)
+    # -------------------------------------------------------------
+    - name: Provision requested administrator users
+      when: target_users is defined and target_users is iterable and (target_users | length > 0)
+      ansible.builtin.raw: |
+        {% for u in target_users %}
+        if ! id "{{ u.username }}" >/dev/null 2>&1; then
+          useradd -m -s /bin/bash "{{ u.username }}" 2>/dev/null || \
+          useradd -m "{{ u.username }}" 2>/dev/null || \
+          adduser -D -s /bin/bash "{{ u.username }}" 2>/dev/null || \
+          adduser -D "{{ u.username }}" 2>/dev/null || true
+        fi
+        if ! id "{{ u.username }}" >/dev/null 2>&1; then
+          echo "CRITICAL: Не удалось создать пользователя '{{ u.username }}'" >&2
+          exit 1
+        fi
+        {% if u.password is defined and u.password | length > 0 %}
+        echo "{{ (u.username ~ ':' ~ u.password) | b64encode }}" | base64 -d | chpasswd 2>/dev/null || echo "{{ u.password | b64encode }}" | base64 -d | passwd --stdin "{{ u.username }}" 2>/dev/null || true
+        {% endif %}
+
+        U_DIR=$(getent passwd "{{ u.username }}" 2>/dev/null | cut -d: -f6 || echo "/home/{{ u.username }}")
+        [ -z "$U_DIR" ] && U_DIR="/home/{{ u.username }}"
+        mkdir -p "$U_DIR" 2>/dev/null || true
+
+        if command -v bash >/dev/null 2>&1; then
+          BASH_PATH="$(command -v bash)"
+          usermod -s "$BASH_PATH" "{{ u.username }}" 2>/dev/null || chsh -s "$BASH_PATH" "{{ u.username }}" 2>/dev/null || true
+        fi
+        if [ ! -f "$U_DIR/.bashrc" ] && [ -f /etc/skel/.bashrc ]; then
+          cp -a /etc/skel/.bashrc "$U_DIR/.bashrc" 2>/dev/null || true
+        fi
+        if [ ! -f "$U_DIR/.profile" ] && [ -f /etc/skel/.profile ]; then
+          cp -a /etc/skel/.profile "$U_DIR/.profile" 2>/dev/null || true
+        fi
+        if [ ! -f "$U_DIR/.bash_logout" ] && [ -f /etc/skel/.bash_logout ]; then
+          cp -a /etc/skel/.bash_logout "$U_DIR/.bash_logout" 2>/dev/null || true
+        fi
+        if [ ! -s "$U_DIR/.bashrc" ]; then
+          echo '[ -z "$PS1" ] && return' > "$U_DIR/.bashrc"
+          echo 'shopt -s checkwinsize 2>/dev/null' >> "$U_DIR/.bashrc"
+          echo 'shopt -s histappend 2>/dev/null' >> "$U_DIR/.bashrc"
+          echo 'HISTCONTROL=ignoreboth' >> "$U_DIR/.bashrc"
+          echo 'HISTSIZE=10000' >> "$U_DIR/.bashrc"
+          echo 'HISTFILESIZE=20000' >> "$U_DIR/.bashrc"
+        fi
+        sed -i 's/^#force_color_prompt=yes/force_color_prompt=yes/' "$U_DIR/.bashrc" 2>/dev/null || true
+        sed -i 's/^#alias ll=/alias ll=/' "$U_DIR/.bashrc" 2>/dev/null || true
+        sed -i 's/^#alias la=/alias la=/' "$U_DIR/.bashrc" 2>/dev/null || true
+        sed -i 's/^#alias l=/alias l=/' "$U_DIR/.bashrc" 2>/dev/null || true
+        sed -i 's/^#alias grep=/alias grep=/' "$U_DIR/.bashrc" 2>/dev/null || true
+
+        {% if u.ssh_key is defined and u.ssh_key | trim | length > 0 %}
+        mkdir -p "$U_DIR/.ssh" 2>/dev/null || true
+        chmod 700 "$U_DIR/.ssh" 2>/dev/null || true
+        touch "$U_DIR/.ssh/authorized_keys" 2>/dev/null || true
+        chmod 600 "$U_DIR/.ssh/authorized_keys" 2>/dev/null || true
+        echo "{{ u.ssh_key | trim }}" | while IFS= read -r kline || [ -n "$kline" ]; do
+          [ -z "$kline" ] && continue
+          case "$kline" in
+            \#*) continue ;;
+          esac
+          if ! grep -qF "$kline" "$U_DIR/.ssh/authorized_keys" 2>/dev/null; then
+            echo "$kline" >> "$U_DIR/.ssh/authorized_keys"
+          fi
+        done
+        chown -R "{{ u.username }}" "$U_DIR/.ssh" 2>/dev/null || true
+        {% endif %}
+
+        UG="$(id -gn "{{ u.username }}" 2>/dev/null || echo "{{ u.username }}")"
+        chown "{{ u.username }}:$UG" "$U_DIR" 2>/dev/null || chown "{{ u.username }}" "$U_DIR" 2>/dev/null || true
+        chown "{{ u.username }}:$UG" "$U_DIR/.bashrc" "$U_DIR/.profile" "$U_DIR/.bash_logout" 2>/dev/null || chown "{{ u.username }}" "$U_DIR/.bashrc" "$U_DIR/.profile" "$U_DIR/.bash_logout" 2>/dev/null || true
+        chmod 644 "$U_DIR/.bashrc" "$U_DIR/.profile" "$U_DIR/.bash_logout" 2>/dev/null || true
+        chmod 750 "$U_DIR" 2>/dev/null || chmod 755 "$U_DIR" 2>/dev/null || true
+
+        {% if u.sudo | default(true) | bool %}
+        mkdir -p /etc/sudoers.d 2>/dev/null && chmod 750 /etc/sudoers.d 2>/dev/null || true
+        grep -q "includedir /etc/sudoers.d" /etc/sudoers 2>/dev/null || echo "#includedir /etc/sudoers.d" >> /etc/sudoers
+        rm -f "/etc/sudoers.d/{{ u.username }}" 2>/dev/null || true
+        (echo "{{ u.username }} ALL=(ALL:ALL) NOPASSWD:ALL" > "/etc/sudoers.d/{{ u.username | replace('.', '_') }}" && chmod 0440 "/etc/sudoers.d/{{ u.username | replace('.', '_') }}") 2>/dev/null || true
+        usermod -a -G sudo "{{ u.username }}" 2>/dev/null || usermod -a -G wheel "{{ u.username }}" 2>/dev/null || true
+        {% endif %}
+
+        echo "USER_{{ u.username }}_CONFIGURED"
+        {% endfor %}
+      register: user_setup_res
+      changed_when: false
+      failed_when: user_setup_res.rc != 0
+
+    # -------------------------------------------------------------
+    # 3. Zabbix Agent 2 Installation (Version 7.0 LTS)
+    # -------------------------------------------------------------
+    - name: "[APT] Setup Zabbix 7.0 LTS repository and install zabbix-agent2"
+      when: "'apt' in pkg_mgr_res.stdout"
+      ansible.builtin.raw: >
+        export DEBIAN_FRONTEND=noninteractive &&
+        apt-get update -qq &&
+        apt-get install -y -qq wget curl ca-certificates gnupg &&
+        . /etc/os-release &&
+        ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64") &&
+        if [ "$ID" = "ubuntu" ]; then
+          VER=$(lsb_release -rs 2>/dev/null || echo "$VERSION_ID");
+          REPO_URL="https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.0+ubuntu${VER}_all.deb";
+        else
+          VER=$(cat /etc/debian_version 2>/dev/null | cut -d. -f1 || echo "12");
+          REPO_URL="https://repo.zabbix.com/zabbix/7.0/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.0+debian${VER}_all.deb";
+        fi;
+        (wget -q -O /tmp/zabbix-release.deb "$REPO_URL" 2>/dev/null ||
+         wget -q -O /tmp/zabbix-release.deb "https://repo.zabbix.com/zabbix/7.0/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.0+debian12_all.deb" 2>/dev/null || true) &&
+        (dpkg -i /tmp/zabbix-release.deb >/dev/null 2>&1 || true) &&
+        apt-get update -qq &&
+        (apt-get install -y -qq zabbix-agent2 || apt-get install -y -qq zabbix-agent)
+      register: apt_install_res
+      changed_when: false
+      failed_when: apt_install_res.rc != 0
+
+    - name: "[DNF/YUM] Setup Zabbix 7.0 LTS repository and install zabbix-agent2"
+      when: "'dnf' in pkg_mgr_res.stdout or 'yum' in pkg_mgr_res.stdout"
+      ansible.builtin.raw: >
+        RHEL_VER=$(rpm -E %{rhel} 2>/dev/null || grep -oE '[0-9]+' /etc/redhat-release 2>/dev/null | head -1 || echo '8') &&
+        RPM_URL="https://repo.zabbix.com/zabbix/7.0/rhel/${RHEL_VER}/x86_64/zabbix-release-latest-7.0.el${RHEL_VER}.noarch.rpm" &&
+        (rpm -Uvh --replacepkgs "$RPM_URL" >/dev/null 2>&1 || true) &&
+        if command -v dnf >/dev/null 2>&1; then
+          dnf install -y zabbix-agent2 || dnf install -y zabbix-agent;
+        else
+          yum install -y zabbix-agent2 || yum install -y zabbix-agent;
+        fi
+      register: yum_install_res
+      changed_when: false
+      failed_when: yum_install_res.rc != 0
+
+    # -------------------------------------------------------------
+    # 4. Generate Exact Zabbix Agent 2 Configuration
+    # -------------------------------------------------------------
+    - name: Write exact zabbix_agent2.conf and start service
+      ansible.builtin.raw: |
+        mkdir -p /etc/zabbix/zabbix_agent2.d/plugins.d /run/zabbix /var/log/zabbix 2>/dev/null || true
+
+        cat << 'EOF' > /etc/zabbix/zabbix_agent2.conf
+        PidFile=/run/zabbix/zabbix_agent2.pid
+        LogFile=/var/log/zabbix/zabbix_agent2.log
+        LogFileSize=0
+        Server={{ zabbix_srv }}
+        ServerActive={{ zabbix_srv }}
+        Hostname={{ target_hostname }}
+        ControlSocket=/run/zabbix/agent.sock
+        Include=./zabbix_agent2.d/plugins.d/*.conf
+        Include=/etc/zabbix/zabbix_agent2.d/*.conf
+        EOF
+
+        # If zabbix-agent (v1) was installed instead of v2, also update agentd.conf
+        if [ -f /etc/zabbix/zabbix_agentd.conf ]; then
+          sed -i 's/^Server=.*/Server={{ zabbix_srv }}/' /etc/zabbix/zabbix_agentd.conf 2>/dev/null || true
+          sed -i 's/^ServerActive=.*/ServerActive={{ zabbix_srv }}/' /etc/zabbix/zabbix_agentd.conf 2>/dev/null || true
+          sed -i 's/^Hostname=.*/Hostname={{ target_hostname }}/' /etc/zabbix/zabbix_agentd.conf 2>/dev/null || true
+        fi
+
+        chown -R zabbix:zabbix /var/log/zabbix /run/zabbix 2>/dev/null || true
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        (systemctl enable --now zabbix-agent2 2>/dev/null && systemctl restart zabbix-agent2 2>/dev/null) || \
+        (systemctl enable --now zabbix-agent 2>/dev/null && systemctl restart zabbix-agent 2>/dev/null) || true
+
+        if systemctl is-active zabbix-agent2 >/dev/null 2>&1 || systemctl is-active zabbix-agent >/dev/null 2>&1; then
+          echo "ZABBIX_AGENT_RUNNING"
+        else
+          echo "WARNING: Service not active yet, check systemctl status zabbix-agent2"
+        fi
+      register: zabbix_conf_res
+      changed_when: false
+
+    - name: Final status summary
+      ansible.builtin.debug:
+        msg: >-
+          Onboarding complete on {{ inventory_hostname }}.
+          Hostname: {{ target_hostname }}.
+          Zabbix Server: {{ zabbix_srv }}.
+          Status: {{ zabbix_conf_res.stdout | trim }}.

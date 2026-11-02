@@ -147,6 +147,31 @@ class ZabbixClient:
 
         return groups_raw or [], hosts_raw or []
 
+    def get_or_create_host_group(self, group_name: str = "Linux servers") -> str:
+        """Finds host group by name or creates it if not found."""
+        try:
+            res = self._call("hostgroup.get", {"filter": {"name": [group_name]}})
+            if res and len(res) > 0:
+                return str(res[0]["groupid"])
+        except Exception as e:
+            logger.warning(f"Error querying hostgroup '{group_name}': {e}")
+
+        try:
+            created = self._call("hostgroup.create", {"name": group_name})
+            if created and "groupids" in created and created["groupids"]:
+                return str(created["groupids"][0])
+        except Exception as e:
+            logger.warning(f"Error creating hostgroup '{group_name}': {e}")
+
+        # Fallback to any existing group
+        try:
+            any_grp = self._call("hostgroup.get", {"limit": 1})
+            if any_grp and len(any_grp) > 0:
+                return str(any_grp[0]["groupid"])
+        except Exception:
+            pass
+        return "2"
+
     def create_host(self, host_name: str, ip_address: str, group_id: str, port: int = 10050, proxy_hostid: Optional[str] = None, template_name: str = "Linux by Zabbix agent") -> dict:
         """Creates a new host in Zabbix via host.create API."""
         templates_payload = []
@@ -159,6 +184,10 @@ class ZabbixClient:
                 templates_payload.append({"templateid": tmpl_res[0]["templateid"]})
         except Exception as e:
             logger.warning(f"Failed to fetch template {template_name}: {e}")
+
+        # If group_id is not numeric, resolve or create it
+        if not str(group_id).isdigit():
+            group_id = self.get_or_create_host_group(str(group_id))
 
         interface_data = {
             "type": 1,

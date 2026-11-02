@@ -33,6 +33,7 @@
   - `disk_space_audit.yml` — аудит дискового пространства и предупреждения о переполнении (`df -h`).
   - `docker_cleanup.yml` — безопасная очистка неиспользуемых Docker-контейнеров, сетей и dangling-образов (без удаления volume-хранилищ).
   - `user_create.yml` / `user_delete.yml` — управление пользователями на Linux и Windows.
+  - `host_onboard.yml` — автоматический онбординг Linux-хоста: развертывание пользователей, установка Zabbix Agent 2 (7.0 LTS) и авто-регистрация в Zabbix API.
   - `host_bootstrap.yml` — безопасный онбординг нового хоста с добавлением SSH-ключей без перезаписи существующих `authorized_keys`.
 
 ### 4. ⚡ Высокопараллельный SSH Ping Check и пагинация
@@ -99,6 +100,7 @@ ansible-web/
 ├── openssl_legacy.cnf          # Конфиг OpenSSL для расшифровки ключей legacy-формата
 ├── playbooks/                  # Каталог YAML плейбуков
 │   ├── ping_check.yml          # Плейбук быстрой проверки доступности
+│   ├── host_onboard.yml        # Автоматический онбординг, Zabbix Agent 2 (7.0 LTS) и пользователи
 │   ├── user_create.yml         # Создание пользователей с fallbacks (Linux + Windows)
 │   ├── user_delete.yml         # Удаление пользователей и очистка sudoers
 │   ├── host_bootstrap.yml      # Онбординг нового хоста без затирания authorized_keys

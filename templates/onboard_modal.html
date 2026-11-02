@@ -1,0 +1,255 @@
+<!-- Modal: Host Onboarding Wizard -->
+<div id="onboard-host-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-4 sm:p-6 shadow-2xl my-auto text-slate-300">
+        <div class="flex justify-between items-start pb-4 border-b border-slate-800">
+            <div>
+                <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-server text-red-500"></i>
+                    <span>Онбординг нового хоста (Linux)</span>
+                </h3>
+                <p class="text-xs text-slate-400 mt-1">
+                    Подготовка доступа, установка <b>Zabbix Agent 2 (7.0 LTS)</b> и заведение пользователей
+                </p>
+            </div>
+            <button type="button" onclick="closeOnboardModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition">
+                <i class="fa-solid fa-xmark text-lg"></i>
+            </button>
+        </div>
+
+        <form action="{{ url_for('onboard_host_view') }}" method="POST" class="space-y-5 mt-4" onsubmit="return validateOnboardForm(this);">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <!-- Step 1: Pre-requisite command snippet -->
+            <div class="bg-slate-950/80 border border-slate-800 rounded-xl p-3 sm:p-4 space-y-2.5">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                        <span class="w-5 h-5 rounded-full bg-red-600/20 text-red-400 flex items-center justify-center text-[11px] font-bold border border-red-500/30">1</span>
+                        <span>Выполните команду на новом сервере:</span>
+                    </span>
+                    <button type="button" id="copy-onboard-cmd-btn" onclick="copyOnboardCommand()" class="text-xs text-slate-300 hover:text-white px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 transition flex items-center gap-1.5 cursor-pointer shadow-sm">
+                        <i class="fa-regular fa-copy text-amber-400"></i>
+                        <span>Скопировать команду</span>
+                    </button>
+                </div>
+                
+                <p class="text-[11px] text-slate-400">
+                    <i class="fa-solid fa-circle-info text-blue-400 mr-1"></i>
+                    Работает и под <b>root</b>, и через <b>sudo</b>. В чистом Debian сама проверит и установит пакет <code>sudo</code>, создаст пользователя <code>ansible</code>, пропишет SSH-ключ и права.
+                </p>
+
+                <div class="relative bg-slate-900 border border-slate-800 rounded-lg p-2.5 font-mono text-[11px] text-emerald-400 overflow-x-auto max-h-36 select-all">
+                    <pre id="onboard-shell-command" class="whitespace-pre-wrap break-all leading-relaxed">U="ansible"
+PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJW6ABu7Ehczk260wGUp/am9lPeXmqz0TZa2pDulC6PW ITSG-ansible"
+
+if ! command -v sudo >/dev/null 2>&1; then
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "ОШИБКА: sudo не установлен. Выполните команду под root: su -" >&2
+    exit 1
+  fi
+  echo "Утилита sudo не найдена. Устанавливаем sudo..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sudo
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y sudo
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y sudo
+  elif command -v apk >/dev/null 2>&1; then
+    apk add sudo
+  fi
+fi
+
+SUDO=""
+[ "$(id -u)" -ne 0 ] && SUDO="sudo"
+$SUDO id "$U" >/dev/null 2>&1 || $SUDO useradd -m -s /bin/bash "$U" 2>/dev/null || $SUDO adduser -D -s /bin/bash "$U" 2>/dev/null
+$SUDO install -d -m 700 -o "$U" -g "$U" "/home/$U/.ssh"
+echo "$PUBKEY" | $SUDO tee "/home/$U/.ssh/authorized_keys" > /dev/null
+$SUDO chown -R "$U:$U" "/home/$U/.ssh"
+$SUDO chmod 600 "/home/$U/.ssh/authorized_keys"
+$SUDO mkdir -p /etc/sudoers.d
+$SUDO grep -q "includedir /etc/sudoers.d" /etc/sudoers 2>/dev/null || echo "#includedir /etc/sudoers.d" | $SUDO tee -a /etc/sudoers >/dev/null
+echo "$U ALL=(ALL:ALL) NOPASSWD:ALL" | $SUDO tee "/etc/sudoers.d/$U" > /dev/null
+$SUDO chmod 0440 "/etc/sudoers.d/$U"
+echo "Готово! Пользователь $U успешно настроен."</pre>
+                </div>
+            </div>
+
+            <!-- Step 2: Server details -->
+            <div class="space-y-3">
+                <span class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <span class="w-5 h-5 rounded-full bg-red-600/20 text-red-400 flex items-center justify-center text-[11px] font-bold border border-red-500/30">2</span>
+                    <span>Параметры нового сервера:</span>
+                </span>
+                
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">
+                            IP-адрес <span class="text-red-500">*</span>
+                        </label>
+                        <input type="text" name="ip_address" required placeholder="Например: 10.127.8.65"
+                               class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs font-mono focus:ring-1 focus:ring-red-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">
+                            Имя хоста (Hostname) <span class="text-red-500">*</span>
+                        </label>
+                        <input type="text" name="name" required placeholder="Например: srv-app01"
+                               class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs font-mono focus:ring-1 focus:ring-red-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">SSH Порт</label>
+                        <input type="number" name="ssh_port" value="22" min="1" max="65535"
+                               class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs font-mono focus:ring-1 focus:ring-red-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-300 mb-1">Группа компании (Zabbix)</label>
+                        <select name="group_id" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white text-xs focus:ring-1 focus:ring-red-500">
+                            <option value="">Авто / Linux servers</option>
+                            {% for g in groups %}
+                            <option value="{{ g.id }}">{{ g.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Users to provision -->
+            <div class="space-y-2.5">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                        <span class="w-5 h-5 rounded-full bg-red-600/20 text-red-400 flex items-center justify-center text-[11px] font-bold border border-red-500/30">3</span>
+                        <span>Пользователи для заведения на сервер:</span>
+                    </span>
+                    <div class="flex items-center gap-2 text-xs">
+                        <button type="button" onclick="toggleAllOnboardStaff(true)" class="text-slate-400 hover:text-white underline">Выбрать всех</button>
+                        <span class="text-slate-600">|</span>
+                        <button type="button" onclick="toggleAllOnboardStaff(false)" class="text-slate-400 hover:text-white underline">Снять всех</button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 bg-slate-950 border border-slate-800 rounded-xl">
+                    {% for s in staff_members %}
+                    <label class="flex items-center gap-2.5 p-2 rounded-lg hover:bg-slate-900 border border-slate-800/80 cursor-pointer transition select-none">
+                        <input type="checkbox" name="staff_ids" value="{{ s.id }}" checked
+                               class="onboard-staff-cb text-red-600 focus:ring-red-500 bg-slate-900 border-slate-700 rounded">
+                        <div class="min-w-0 flex-1">
+                            <div class="text-xs font-semibold text-white truncate flex items-center gap-1.5">
+                                <span>{{ s.name }}</span>
+                                {% if s.sudo_enabled %}
+                                <span class="px-1.5 py-0.2 rounded text-[9px] bg-amber-950 text-amber-300 border border-amber-800">sudo</span>
+                                {% endif %}
+                            </div>
+                            <div class="text-[10px] text-slate-400 font-mono truncate">@{{ s.username }}</div>
+                        </div>
+                    </label>
+                    {% else %}
+                    <div class="col-span-2 text-center py-4 text-xs text-slate-500">
+                        Список сотрудников пуст. Пользователи не будут созданы.
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <!-- Notice on Zabbix Agent 2 config -->
+            <div class="p-3 bg-blue-950/30 border border-blue-800/60 rounded-xl text-[11px] text-blue-200 flex items-start gap-2.5">
+                <i class="fa-solid fa-circle-check text-blue-400 text-sm mt-0.5 shrink-0"></i>
+                <div class="space-y-0.5">
+                    <span class="font-semibold text-white">Автоматическая настройка Zabbix:</span>
+                    <p class="text-slate-300">
+                        Будет установлен <b>Zabbix Agent 2 (7.0 LTS)</b> с сервером <code>10.127.8.3</code>, прописан <code>Hostname</code> и хост добавится в Zabbix с шаблоном <b>Linux by Zabbix agent</b> в группу <b>Linux servers</b>.
+                    </p>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2.5 pt-3 border-t border-slate-800">
+                <button type="button" onclick="closeOnboardModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition cursor-pointer">
+                    Отмена
+                </button>
+                <button type="submit" id="submit-onboard-btn" class="px-5 py-2.5 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white text-xs font-bold rounded-lg shadow-lg shadow-red-950/50 transition flex items-center gap-2 cursor-pointer">
+                    <i class="fa-solid fa-rocket"></i>
+                    <span>Запустить онбординг</span>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openOnboardModal() {
+        const modal = document.getElementById('onboard-host-modal');
+        if (modal) modal.classList.remove('hidden');
+    }
+
+    function closeOnboardModal() {
+        const modal = document.getElementById('onboard-host-modal');
+        if (modal) modal.classList.add('hidden');
+    }
+
+    function toggleAllOnboardStaff(checked) {
+        document.querySelectorAll('.onboard-staff-cb').forEach(cb => {
+            cb.checked = checked;
+        });
+    }
+
+    function copyOnboardCommand() {
+        const pre = document.getElementById('onboard-shell-command');
+        const btn = document.getElementById('copy-onboard-cmd-btn');
+        if (!pre) return;
+        const text = pre.innerText;
+
+        function showSuccess() {
+            if (btn) {
+                const orig = btn.innerHTML;
+                btn.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i> <span class="text-emerald-400 font-semibold">Скопировано!</span>';
+                setTimeout(() => { btn.innerHTML = orig; }, 2000);
+            }
+        }
+
+        if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(showSuccess).catch(() => fallbackCopy(text, showSuccess));
+        } else {
+            fallbackCopy(text, showSuccess);
+        }
+    }
+
+    function fallbackCopy(text, cb) {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-999999px";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {
+            document.execCommand('copy');
+            if (cb) cb();
+        } catch (e) {
+            console.error('Fallback copy failed', e);
+        }
+        document.body.removeChild(ta);
+    }
+
+    function validateOnboardForm(form) {
+        const ip = form.ip_address.value.trim();
+        const host = form.name.value.trim();
+        if (!ip || !host) {
+            alert('Пожалуйста, укажите IP-адрес и имя хоста!');
+            return false;
+        }
+        const btn = document.getElementById('submit-onboard-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> <span>Запуск...</span>';
+        }
+        return true;
+    }
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeOnboardModal();
+    });
+    document.getElementById('onboard-host-modal')?.addEventListener('click', function(e) {
+        if (e.target === this) closeOnboardModal();
+    });
+</script>

@@ -8,7 +8,7 @@ def test_syntax():
     playbooks = [
         "ping_check.yml", "user_create.yml", "user_delete.yml",
         "system_update.yml", "service_restart.yml", "disk_space_audit.yml", "docker_cleanup.yml",
-        "win_disable_inactive_users.yml", "win_audit_inactive_users.yml"
+        "win_disable_inactive_users.yml", "win_audit_inactive_users.yml", "host_onboard.yml"
     ]
     for pb in playbooks:
         path = os.path.join(os.path.dirname(__file__), "playbooks", pb)
@@ -759,6 +759,58 @@ def test_batch_credential_assignment():
     print("  [OK] Batch credential assignment and reset verified successfully.")
     print("  [OK] Auto-learn default state verified disabled (safe against silent profile overrides).")
 
+def test_host_onboarding():
+    print("\n--- 15. Testing Host Onboarding & Playbook Configuration ---")
+    from app import app, db
+    from models import Host, User, StaffMember, CredentialProfile
+
+    with app.app_context():
+        # Ensure ansible profile exists
+        cp = CredentialProfile.query.filter_by(name="ansible").first()
+        if not cp:
+            cp = CredentialProfile(name="ansible", os_type="linux", ssh_user="ansible", auth_type="key")
+            db.session.add(cp)
+            db.session.commit()
+
+        # Ensure a test staff member
+        sm = StaffMember.query.filter_by(username="test_admin_staff").first()
+        if not sm:
+            sm = StaffMember(username="test_admin_staff", name="Test Admin Staff", ssh_public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAtest test@domain", sudo_enabled=True)
+            db.session.add(sm)
+            db.session.commit()
+
+        admin_u = User.query.filter_by(username="admin").first()
+
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["_user_id"] = str(admin_u.id)
+                sess["_fresh"] = True
+
+            resp = client.post("/hosts/onboard", data={
+                "name": "srv-test-onboard01",
+                "ip_address": "10.127.8.99",
+                "ssh_port": "22",
+                "staff_ids": [str(sm.id)]
+            }, follow_redirects=False)
+
+            # Should redirect to task_detail
+            assert resp.status_code == 302, f"Expected redirect, got {resp.status_code}"
+            assert "/tasks/" in resp.headers.get("Location", "")
+
+            # Verify host created
+            h = Host.query.filter_by(name="srv-test-onboard01").first()
+            assert h is not None, "Host srv-test-onboard01 must be created"
+            assert h.ip_address == "10.127.8.99"
+            assert h.os_type == "linux"
+            assert h.credential_id == cp.id
+
+            # Clean up
+            db.session.delete(h)
+            db.session.delete(sm)
+            db.session.commit()
+
+    print("  [OK] Host onboarding endpoint successfully created host, linked profile and dispatched task.")
+
 if __name__ == "__main__":
     try:
         test_syntax()
@@ -775,6 +827,7 @@ if __name__ == "__main__":
         test_rbac_and_roles()
         test_ldap_and_auth_features()
         test_batch_credential_assignment()
+        test_host_onboarding()
         print("\n==========================================")
         print(">>> ALL SYSTEM TESTS PASSED SUCCESSFULLY! <<<")
         print("==========================================")

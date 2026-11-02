@@ -719,13 +719,15 @@ def dashboard():
     groups = HostGroup.query.order_by(HostGroup.name).all()
     recent_tasks = TaskJob.query.order_by(TaskJob.id.desc()).limit(5).all()
     zabbix_setting = ZabbixSetting.query.first()
+    staff_members = StaffMember.query.filter_by(is_active=True).order_by(StaffMember.name).all()
 
     return render_template(
         "dashboard.html",
         stats=stats,
         groups=groups,
         recent_tasks=recent_tasks,
-        zabbix_setting=zabbix_setting
+        zabbix_setting=zabbix_setting,
+        staff_members=staff_members
     )
 
 
@@ -826,6 +828,7 @@ def hosts_view():
     groups = HostGroup.query.order_by(HostGroup.name).all()
     custom_groups = CustomGroup.query.order_by(CustomGroup.is_system.desc(), CustomGroup.name).all()
     credential_profiles = CredentialProfile.query.order_by(CredentialProfile.name).all()
+    staff_members = StaffMember.query.filter_by(is_active=True).order_by(StaffMember.name).all()
 
     return render_template(
         "hosts.html",
@@ -835,6 +838,7 @@ def hosts_view():
         groups=groups,
         custom_groups=custom_groups,
         credential_profiles=credential_profiles,
+        staff_members=staff_members,
         tab=tab,
         sort_by=sort_by,
         count_zabbix=count_zabbix,
@@ -917,6 +921,113 @@ def create_host_manual():
         flash(f"Хост {name} успешно добавлен в систему.", "success")
 
     return redirect(url_for("host_detail", host_id=host.id))
+
+
+@app.route("/hosts/onboard", methods=["POST"])
+@login_required
+@write_required
+def onboard_host_view():
+    import time
+    name = request.form.get("name", "").strip()
+    ip_address = request.form.get("ip_address", "").strip()
+    raw_port = request.form.get("ssh_port", "").strip()
+    group_id = request.form.get("group_id")
+    staff_ids = request.form.getlist("staff_ids")
+
+    if not name or not ip_address:
+        flash("Имя хоста и IP-адрес обязательны для заполнения.", "danger")
+        return redirect(request.referrer or url_for("dashboard"))
+
+    ssh_port = int(raw_port) if raw_port and raw_port.isdigit() else 22
+
+    # Find existing or create new Host
+    host = Host.query.filter((Host.name == name) | (Host.ip_address == ip_address)).first()
+    if not host:
+        manual_hid = f"onboard_{int(time.time())}_{name[:8]}"
+        host = Host(
+            zabbix_hostid=manual_hid,
+            name=name,
+            ip_address=ip_address,
+            ssh_port=ssh_port,
+            is_ip_manually_set=True,
+            is_os_manually_set=True,
+            is_ignored_manually_set=True,
+            ip_source="manual",
+            zabbix_agent_ip=ip_address,
+            os_type="linux",
+            group_id=int(group_id) if group_id and str(group_id).isdigit() else None,
+            is_enabled=True,
+            is_ignored=False,
+            device_type="server",
+            last_status="unknown"
+        )
+        db.session.add(host)
+    else:
+        host.name = name
+        host.ip_address = ip_address
+        host.ssh_port = ssh_port
+        host.os_type = "linux"
+        host.is_enabled = True
+        host.is_ignored = False
+        if group_id and str(group_id).isdigit():
+            host.group_id = int(group_id)
+
+    # Automatically bind to 'ansible' credential profile
+    ansible_cred = CredentialProfile.query.filter(
+        (CredentialProfile.name.ilike("ansible")) | (CredentialProfile.ssh_user == "ansible")
+    ).first()
+    if ansible_cred:
+        host.credential_id = ansible_cred.id
+
+    db.session.commit()
+
+    # Register host in Zabbix with template 'Linux by Zabbix agent' and group 'Linux servers'
+    z_setting = ZabbixSetting.query.first()
+    if z_setting and z_setting.url and z_setting.token:
+        try:
+            from zabbix_client import ZabbixClient
+            zc = ZabbixClient(z_setting.url, z_setting.token, verify_ssl=z_setting.verify_ssl)
+            gid = zc.get_or_create_host_group("Linux servers")
+            z_res = zc.create_host(host.name, host.ip_address, group_id=gid, template_name="Linux by Zabbix agent")
+            if z_res and "hostids" in z_res and z_res["hostids"]:
+                host.zabbix_hostid = str(z_res["hostids"][0])
+                db.session.commit()
+        except Exception as ze:
+            logger.warning(f"Zabbix auto-registration for {name}: {ze}")
+
+    # Prepare target_users from selected staff members
+    target_users = []
+    if staff_ids:
+        int_ids = [int(i) for i in staff_ids if str(i).isdigit()]
+        staff_list = StaffMember.query.filter(StaffMember.id.in_(int_ids)).all()
+        for s in staff_list:
+            target_users.append({
+                "username": s.username,
+                "name": s.name,
+                "ssh_key": s.ssh_public_key or "",
+                "password": s.password or "",
+                "sudo": bool(s.sudo_enabled)
+            })
+
+    # Dispatch onboarding task
+    task_id = dispatch_task(
+        app=app,
+        task_type="host_onboard",
+        playbook_name="host_onboard.yml",
+        host_ids=[host.id],
+        extra_vars={
+            "target_hostname": name,
+            "target_users": target_users,
+            "zabbix_server": "10.127.8.3"
+        },
+        user_id=current_user.id,
+        summary=f"Онбординг нового хоста {name} ({ip_address})",
+        filter_info=f"Установка Zabbix Agent 2 (7.0 LTS) и {len(target_users)} пользователей"
+    )
+
+    flash(f"Запущен онбординг хоста {name} ({ip_address}). Настраиваем пользователей и Zabbix Agent 2...", "success")
+    return redirect(url_for("task_detail", task_id=task_id))
+
 
 @app.route("/hosts/toggle-ignore", methods=["POST"])
 @login_required
