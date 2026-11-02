@@ -80,12 +80,16 @@
           echo 'if [ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi' > "$U_DIR/.profile"
         fi
 
+        UG="$(id -gn "{{ u.username }}" 2>/dev/null || echo "{{ u.username }}")"
+        [ -z "$UG" ] && UG="{{ u.username }}"
+
         {% if u.ssh_key is defined and u.ssh_key | trim | length > 0 %}
         mkdir -p "$U_DIR/.ssh" 2>/dev/null || true
         chmod 700 "$U_DIR/.ssh" 2>/dev/null || true
         touch "$U_DIR/.ssh/authorized_keys" 2>/dev/null || true
         chmod 600 "$U_DIR/.ssh/authorized_keys" 2>/dev/null || true
-        echo "{{ u.ssh_key | b64encode }}" | base64 -d | while IFS= read -r kline || [ -n "$kline" ]; do
+        echo "{{ u.ssh_key | b64encode }}" | base64 -d | tr -d '\r' | while IFS= read -r kline || [ -n "$kline" ]; do
+          kline="$(echo "$kline" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
           [ -z "$kline" ] && continue
           case "$kline" in
             \#*) continue ;;
@@ -94,10 +98,10 @@
             echo "$kline" >> "$U_DIR/.ssh/authorized_keys"
           fi
         done
-        chown -R "{{ u.username }}" "$U_DIR/.ssh" 2>/dev/null || true
+        chown -R "{{ u.username }}:$UG" "$U_DIR/.ssh" 2>/dev/null || chown -R "{{ u.username }}" "$U_DIR/.ssh" 2>/dev/null || true
+        chmod 700 "$U_DIR/.ssh" 2>/dev/null || true
+        chmod 600 "$U_DIR/.ssh/authorized_keys" 2>/dev/null || true
         {% endif %}
-
-        UG="$(id -gn "{{ u.username }}" 2>/dev/null || echo "{{ u.username }}")"
         chown "{{ u.username }}:$UG" "$U_DIR" 2>/dev/null || chown "{{ u.username }}" "$U_DIR" 2>/dev/null || true
         chown "{{ u.username }}:$UG" "$U_DIR/.bashrc" "$U_DIR/.profile" "$U_DIR/.bash_logout" 2>/dev/null || chown "{{ u.username }}" "$U_DIR/.bashrc" "$U_DIR/.profile" "$U_DIR/.bash_logout" 2>/dev/null || true
         chmod 644 "$U_DIR/.bashrc" "$U_DIR/.profile" "$U_DIR/.bash_logout" 2>/dev/null || true

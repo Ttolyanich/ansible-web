@@ -1004,7 +1004,7 @@ def onboard_host_view():
             target_users.append({
                 "username": s.username,
                 "name": s.name,
-                "ssh_key": s.ssh_public_key or "",
+                "ssh_key": (s.ssh_public_key or "").replace("\r\n", "\n").replace("\r", "\n").strip(),
                 "password": s.password or "",
                 "sudo": bool(s.sudo_enabled)
             })
@@ -1311,7 +1311,7 @@ def create_staff():
     username = request.form.get("username", "").strip()
     department = request.form.get("department", "").strip()
     password = request.form.get("password", "").strip()
-    ssh_public_key = request.form.get("ssh_public_key", "").strip()
+    ssh_public_key = request.form.get("ssh_public_key", "").replace("\r\n", "\n").replace("\r", "\n").strip()
     sudo_enabled = request.form.get("sudo_enabled") == "1"
     is_active = request.form.get("is_active") == "1"
 
@@ -1353,7 +1353,7 @@ def edit_staff(staff_id):
     username = request.form.get("username", "").strip().lower()
     department = request.form.get("department", "").strip()
     password = request.form.get("password", "").strip()
-    ssh_public_key = request.form.get("ssh_public_key", "").strip()
+    ssh_public_key = request.form.get("ssh_public_key", "").replace("\r\n", "\n").replace("\r", "\n").strip()
     sudo_enabled = request.form.get("sudo_enabled") == "1"
     is_active = request.form.get("is_active") == "1"
 
@@ -1777,7 +1777,7 @@ def run_user_ops():
             target_users.append({
                 "username": s.username,
                 "name": s.name,
-                "ssh_key": s.ssh_public_key or "",
+                "ssh_key": (s.ssh_public_key or "").replace("\r\n", "\n").replace("\r", "\n").strip(),
                 "password": s.password or "",
                 "sudo": bool(s.sudo_enabled)
             })
@@ -2823,7 +2823,7 @@ def task_retry_failed(task_id):
             target_users.append({
                 "username": s.username,
                 "name": s.name,
-                "ssh_key": s.ssh_public_key or "",
+                "ssh_key": (s.ssh_public_key or "").replace("\r\n", "\n").replace("\r", "\n").strip(),
                 "password": s.password or "",
                 "sudo": s.sudo_enabled
             })
