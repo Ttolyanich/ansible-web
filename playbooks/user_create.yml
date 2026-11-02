@@ -85,7 +85,7 @@
         chmod 700 "$U_DIR/.ssh" 2>/dev/null || true
         touch "$U_DIR/.ssh/authorized_keys" 2>/dev/null || true
         chmod 600 "$U_DIR/.ssh/authorized_keys" 2>/dev/null || true
-        echo "{{ u.ssh_key | trim }}" | while IFS= read -r kline || [ -n "$kline" ]; do
+        echo "{{ u.ssh_key | b64encode }}" | base64 -d | while IFS= read -r kline || [ -n "$kline" ]; do
           [ -z "$kline" ] && continue
           case "$kline" in
             \#*) continue ;;

@@ -155,9 +155,19 @@
                 </a>
 
                 <div class="flex items-center gap-2">
-                    <button type="button" onclick="openEditStaffModal('{{ s.id }}', '{{ s.name|escape }}', '{{ s.username|escape }}', '{{ s.department|default('', true)|escape }}', {{ 'true' if s.sudo_enabled else 'false' }}, {{ 'true' if s.is_active else 'false' }}, {{ 'true' if s.encrypted_password else 'false' }}, '{{ s.ssh_public_key|default('', true)|escape }}', {{ 'true' if s.is_system or s.username == 'ansible' else 'false' }})"
+                    <button type="button"
+                            data-id="{{ s.id }}"
+                            data-name="{{ s.name }}"
+                            data-username="{{ s.username }}"
+                            data-department="{{ s.department|default('', true) }}"
+                            data-sudo="{{ 'true' if s.sudo_enabled else 'false' }}"
+                            data-active="{{ 'true' if s.is_active else 'false' }}"
+                            data-haspass="{{ 'true' if s.encrypted_password else 'false' }}"
+                            data-system="{{ 'true' if s.is_system or s.username == 'ansible' else 'false' }}"
+                            onclick="handleEditStaffClick(this)"
                             class="px-2.5 py-1.5 rounded text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 transition flex items-center gap-1" title="Редактировать">
                         <i class="fa-solid fa-pen"></i>
+                        <textarea class="hidden staff-key-data">{{ s.ssh_public_key or '' }}</textarea>
                     </button>
                     {% if s.is_system or s.username == 'ansible' %}
                     <span class="px-2.5 py-1.5 rounded text-xs bg-slate-800/40 text-slate-500 border border-slate-800 cursor-not-allowed flex items-center gap-1" title="Системный аккаунт ansible защищен от удаления">
@@ -319,6 +329,22 @@
     }
     function closeCreateStaffModal() {
         document.getElementById('create-staff-modal').classList.add('hidden');
+    }
+
+    function handleEditStaffClick(btn) {
+        const keyArea = btn.querySelector('.staff-key-data');
+        const sshKey = keyArea ? keyArea.value : '';
+        openEditStaffModal(
+            btn.dataset.id,
+            btn.dataset.name,
+            btn.dataset.username,
+            btn.dataset.department,
+            btn.dataset.sudo === 'true',
+            btn.dataset.active === 'true',
+            btn.dataset.haspass === 'true',
+            sshKey,
+            btn.dataset.system === 'true'
+        );
     }
 
     function openEditStaffModal(id, name, username, department, sudoEnabled, isActive, hasPassword, sshKey, isSystem) {
